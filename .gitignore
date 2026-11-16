@@ -30,3 +30,4 @@ __pycache__/
 
 # Packages built by scripts/ (task-108)
 /dist/
+./.rnsk-memory

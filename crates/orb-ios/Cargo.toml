@@ -1,0 +1,36 @@
+[package]
+name = "orb-ios"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The iPad app: the panel (orb-ui) and the player (orb-player) in an iOS bundle"
+
+[[bin]]
+name = "orb-ios"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+# Only the iOS build has the app in it: the shell is eframe driving winit's UIKit backend and
+# cpal driving CoreAudio, and neither belongs to a desktop build of this crate.
+[target.'cfg(target_os = "ios")'.dependencies]
+orb-engine = { path = "../orb-engine" }
+orb-player = { path = "../orb-player" }
+orb-ui = { path = "../orb-ui" }
+rbm = { path = "../rbm" }
+# The app's own log lines, eframe's and wgpu's: the boot log is the only place a device
+# build can say anything (there is no attached stderr), so the logger writes there.
+log = "0.4"
+# The same eframe `orb-ui` asks for on iOS: the two feature sets unify, so the defaults here
+# would bring the desktop's clipboard and Wayland code back into the build.
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "wgpu"] }
+# egui-winit asks for winit without its default features; wgpu needs winit's raw-window-handle
+# 0.6 impl, and this is the direct way to turn it on.
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06"] }
+
+[build-dependencies]
+# The one Objective-C function the app calls: the audio session, which CoreAudio's RemoteIO
+# unit needs active and in the Playback category before the first buffer.
+cc = "1"

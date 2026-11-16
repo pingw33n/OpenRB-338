@@ -149,6 +149,7 @@ The Windows build of OpenRB-338 is a GUI-subsystem exe (task-111), see "The Wind
 | `scripts/appimage-smoke.sh APPIMAGE` | runs an AppImage in a stock `ubuntu:22.04` container: contents, no glibc bundled, `orb`, `--screenshot` under xvfb |
 | `scripts/macos-app.sh OUT_DIR UI [CLI]` | makes `OUT_DIR/OpenRB-338.app` from the binaries (Info.plist, icon, ad-hoc signature) |
 | `scripts/macos-dev-app.sh` | wraps `target/release/OpenRB-338` into `target/OpenRB-338.app` for everyday runs |
+| `scripts/ios-app.sh` | builds the iPad app (`orb-ios`) for `aarch64-apple-ios`, signs `dist/ios/OpenRB-338.app` and installs it on a paired iPad (below) |
 | `scripts/version.sh` | prints the version `YYYY.MMDD.HHMM` (the UTC build time from `SOURCE_DATE_EPOCH`, to the minute); `--time` the full time, `--epoch v2026.1028.1930` the `SOURCE_DATE_EPOCH` of a release tag |
 | `scripts/release-env.sh` | prints the build environment all packages of a release share (`SOURCE_DATE_EPOCH`, `ORB_BUILD_BRANCH`) |
 | `scripts/docker/linux-build.Dockerfile` | the Linux build image (Ubuntu 22.04, build tools, ALSA headers) |
@@ -507,6 +508,115 @@ read the name and the icon.
 In CI the `dmg` job of `release.yml` runs `SKIP_BUILD=1 scripts/package-dmg.sh <target>` over the
 `bin-<target>` artifact of each macOS target, so the app carries the same version string as the `.tar.gz`
 packages.
+
+## The iPad app (iOS)
+
+`crates/orb-ios` is the iPad app: the same panel (`orb-ui`) and player (`orb-player`) in an iOS
+bundle, with eframe driving winit's UIKit backend, wgpu on Metal, and cpal on CoreAudio's
+RemoteIO unit. It takes no arguments: it starts on a new song with the built-in kit "Standard
+ReBirth", and Files shows the app's Documents folder (`UIFileSharingEnabled`), which the file
+browser opens.
+
+```sh
+scripts/ios-app.sh [--run] [--no-install]
+```
+
+`ios-app.sh` cross-compiles the crate for `aarch64-apple-ios`, wraps the binary in
+`dist/ios/OpenRB-338.app` (the Info.plist from `ios/Info.plist.in`), signs it with an Apple
+Development identity and a provisioning profile, and installs it with `xcrun devicectl`.
+`--run` starts the app after installing; `--no-install` stops after signing. `ORB_IOS_DEVICE`
+names the iPad (default: the first paired iPad in `xcrun devicectl list devices`),
+`ORB_IOS_BUNDLE_ID` the bundle id (default `com.rnsksoftronics.openrb338`), `ORB_IOS_SIGN` the
+identity and `ORB_IOS_PROFILE` the profile. The script prints the profile and identity it chose.
+
+Needs Xcode with the iPadOS SDK, `rustup target add aarch64-apple-ios`, the iPad paired with
+this Mac and an Apple Development identity the chosen profile lists. The default profile is the newest unexpired
+wildcard (`team.*`) that names the device and a certificate this Mac holds; Xcode creates one
+the first time it deploys to the iPad. Signing needs the login keychain the key lives in, so a
+background session (an agent's shell) cannot sign: run the script from Terminal once, and the
+dialog's "Always Allow" makes later runs work anywhere.
+
+`IPHONEOS_DEPLOYMENT_TARGET` (default 15.0) is exported before the build: without it rustc
+links at the target's own minimum (iOS 10.0) and the vendored vorbis C objects call
+`___chkstk_darwin`, which libSystem only exports above it.
+
+What differs from the desktop build, all of it because iPadOS has requirements winit 0.30's
+UIKit backend does not meet:
+
+- **The scene lifecycle.** iPadOS 26 and later kill an app at launch that has not adopted
+  UIScene (`UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption`, an `EXC_BREAKPOINT`
+  in `-[UIApplication workspace:didCreateScene:...]`). `ios/Info.plist.in` declares a scene
+  manifest and names the delegate class `OrbSceneDelegate`; `src/audio_session.m` implements it.
+  The same file swizzles `-[UIWindow makeKeyAndVisible]` to put winit's window in the scene
+  first: a window in no scene converts to a zero-sized frame in screen space, and wgpu then
+  makes a zero-sized surface (`egui_wgpu::winit: The window width was zero`).
+- **The device limits.** `crates/orb-ios` asks for `adapter.limits()` instead of egui's
+  `wgpu::Limits::default()`: the iPad's Metal adapter allows 15 inter-stage shader variables
+  and the default asks for 16, and a limit above the adapter's is a startup error. eframe logs
+  it and calls `std::process::exit(0)`, so the app vanishes without a crash report.
+- **The audio session.** `src/audio_session.m` sets the Playback category (the default,
+  SoloAmbient, is silenced by the ring/silent switch), 44.1 kHz and 23 ms of buffer before
+  cpal opens the unit. The device's output is 48 kHz, so `orb-player` resamples, as it does on
+  a desktop with a 48 kHz device.
+- `orb-ui`'s eframe has no default features on iOS: the desktop defaults (the clipboard
+  through arboard, which pulls `wl-clipboard-rs`, and the X11 and Wayland backends) do not
+  build for iOS. The iPad build asks for wgpu and the default fonts, so copy and the About
+  link do nothing, and `winit/rwh_06` is turned on directly in `crates/orb-ios`. `rfd` is
+  desktop-only, so the crash hook's message box is the stderr line on iOS.
+
+`ORB_IOS_PLAY=1` in the app's environment presses Play at the start, for a run without a
+hand (the desktop's `--play`; `devicectl` passes it as `DEVICECTL_CHILD_ORB_IOS_PLAY=1`, or
+through `--environment-variables`).
+
+**Touch targets.** Apple's smallest touch target is 44 points, and egui's widgets are a text
+line tall (20 points here), so a finger mostly missed the dialogs' buttons. The app creator
+gives every egui style a 44-point interact height with roomier padding, and the two places
+that size their own rectangles follow: the browser's rows and the error box's close button.
+The panel's controls are drawn rather than widget-built, so they keep their own layout.
+
+A device build has no attached stderr, so every step of the start writes
+`Documents/boot.log` (milliseconds since the start, the panic hook, and everything the `log`
+crate says at Info and above). Fetch it with
+
+```sh
+xcrun devicectl device copy from --device UDID --domain-type appDataContainer \
+    --domain-identifier com.rnsksoftronics.openrb338 \
+    --source Documents/boot.log --destination boot.log
+```
+
+Crash reports (an `EXC_BREAKPOINT` among them) are in `systemCrashLogs`:
+`xcrun devicectl device copy from --device UDID --domain-type systemCrashLogs --source .
+--destination crashlogs`. `xcrun devicectl device capture screenshot --device UDID
+--destination shot.png` and `xcrun devicectl device info lockState --device UDID` answer what
+the screen shows without asking.
+
+**The menus.** `orb-ui`'s `App::menus` is the one definition of the app's menus: the panel's
+bar draws it, and `crates/orb-ios` turns it into rows (`src/menus.rs`) that `src/menus.m`
+builds `UIMenu`s from. A chosen item's id goes back through `App::menu_command`, so the iPad's
+menu bar and the panel's run the same commands: File (New/Open/Save with their shortcuts, Save
+As, Info, Export), Mods (the mods folder, with a submenu for files that share a name),
+Options (the two flags and the keyboard mode) and Help.
+
+Two things make that bar ours rather than UIKit's default one. winit calls
+`UIApplicationMain(argc, argv, nil, nil)`, so the app would launch with no delegate class;
+`src/menus.m` defines `UIApplicationMain` itself (resolving UIKit's through `dlsym`), names an
+`OrbAppDelegate` and an `OrbApplication` subclass, and those two build the menus — setting
+`UIApplication.delegate` after launch is too late. And the four menus replace the system's
+File/Edit/Format/View/Window/Help rather than joining them, so the bar reads File, Mods,
+Options, Help. iPadOS 26 and later shows this bar in the windowed modes and hides it until a
+swipe down from the top edge; `buildMenuWithBuilder:` runs when it is first built, so a device
+`boot.log` gains `menu bar built`. The panel's own bar stays only in full screen: in a window
+`orb_ios_windowed` (the window against its screen) hides it, so there are not two.
+
+**The icon.** `ios/Assets.xcassets/AppIcon.appiconset` holds one opaque 1024x1024 picture;
+`actool` (in `scripts/ios-app.sh`) turns it into the icon set, and its partial Info.plist supplies
+`CFBundleIcons` and `CFBundleIconName`. The file came from `orb338.png` on the user's SSD,
+cropped to its artwork and filled to the edges: iOS masks the icon itself and does not accept
+a transparent margin.
+
+Not there yet: document types (opening an `.rbs` from Files or Mail), touch-sized knobs and
+browser rows, the on-screen keyboard (the browser's path bar needs one), and any way to close
+the window (iOS suspends the app instead).
 
 ## The Windows installer (task-111)
 

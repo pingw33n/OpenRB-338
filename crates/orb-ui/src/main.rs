@@ -386,6 +386,7 @@ fn start_error_text(e: &eframe::Error) -> String {
 fn report_start_error(e: &eframe::Error) {
     let text = start_error_text(e);
     eprintln!("{text}");
+    #[cfg(not(target_os = "ios"))]
     if !orb_ui::crash::no_dialog() {
         let _ = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)

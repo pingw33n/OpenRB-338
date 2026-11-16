@@ -45,7 +45,7 @@ const RED: Color32 = Color32::from_rgb(0xe2, 0x41, 0x3b);
 const ORANGE: Color32 = Color32::from_rgb(0xf0, 0x8a, 0x24);
 const GOLD: Color32 = Color32::from_rgb(0xcd, 0xb5, 0x4a);
 
-const ROW_H: f32 = 20.0;
+const ROW_H: f32 = if cfg!(target_os = "ios") { 44.0 } else { 20.0 };
 
 /// What the browser is asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

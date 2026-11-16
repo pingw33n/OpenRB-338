@@ -23,7 +23,7 @@ pub fn text_for(sc: &KeyboardShortcut, is_mac: bool) -> String {
 
 /// The text of a shortcut on the running platform.
 pub fn text(ctx: &Context, sc: &KeyboardShortcut) -> String {
-    text_for(sc, ctx.os().is_mac())
+    text_for(sc, ctx.os().is_mac() || cfg!(target_os = "ios"))
 }
 
 /// Takes the shortcut's key press from the input, true if it was pressed.

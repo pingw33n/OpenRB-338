@@ -2975,6 +2975,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "orb-ios"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "eframe",
+ "log",
+ "orb-engine",
+ "orb-player",
+ "orb-ui",
+ "rbm",
+ "winit",
+]
+
+[[package]]
 name = "orb-player"
 version = "0.1.0"
 dependencies = [

@@ -115,8 +115,8 @@ pub fn find_rb20ful(explicit: Option<&Path>, input: &Path) -> Result<PathBuf, Fa
     ))
 }
 
-/// `sub` (or the folder itself when empty) next to the orb binary and in the Windows install
-/// locations of the original.
+/// `sub` (or the folder itself when empty) next to the orb binary, in the app's Documents
+/// folder on iOS and in the Windows install locations of the original.
 fn implicit_dirs(sub: &str) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Some(d) = std::env::current_exe()
@@ -124,6 +124,12 @@ fn implicit_dirs(sub: &str) -> Vec<PathBuf> {
         .and_then(|e| e.parent().map(Path::to_path_buf))
     {
         roots.push(d);
+    }
+    if cfg!(target_os = "ios") {
+        // The app's Files-visible folder: where a mod arrives through the Files app.
+        if let Some(home) = std::env::var_os("HOME") {
+            roots.push(PathBuf::from(home).join("Documents"));
+        }
     }
     if cfg!(windows) {
         for var in ["ProgramFiles(x86)", "ProgramFiles"] {

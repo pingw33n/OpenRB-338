@@ -44,6 +44,89 @@ use crate::shortcuts;
 /// The height of the menu bar in points.
 pub const MENU_H: f32 = 22.0;
 
+/// One menu of the bar: the panel draws it, and the iPad shows it as a UIKit menu
+/// (`crates/orb-ios`), so the two cannot disagree about what the app's menus are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Menu {
+    /// The bar's title: "File", "Mods", "Options" or "Help".
+    pub title: String,
+    pub items: Vec<MenuItem>,
+    /// The list may be long (a Mods folder of many mods): the bar scrolls it.
+    pub scroll: bool,
+}
+
+/// A line of a menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MenuItem {
+    /// A command; `hint` is why it is off, shown while it is.
+    Action {
+        id: String,
+        title: String,
+        shortcut: Option<Shortcut>,
+        enabled: bool,
+        hint: Option<&'static str>,
+    },
+    /// A checkbox: the two flags of Options.
+    Check {
+        id: String,
+        title: String,
+        checked: bool,
+    },
+    /// A radio button: the keyboard mode.
+    Radio {
+        id: String,
+        title: String,
+        checked: bool,
+    },
+    /// An entry that is on or off: a mod, or a variant of one.
+    Choice {
+        id: String,
+        title: String,
+        selected: bool,
+    },
+    /// A mod whose files share its name: a submenu of its variants.
+    Submenu {
+        title: String,
+        selected: bool,
+        items: Vec<MenuItem>,
+    },
+    /// A line that is not a command, such as the Mods folder's error.
+    Label(String),
+    Separator,
+}
+
+/// A shortcut as both menu bars show and bind it: `command` is Cmd on a Mac and on the iPad,
+/// Ctrl elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shortcut {
+    pub key: Key,
+    pub command: bool,
+    pub shift: bool,
+    pub alt: bool,
+}
+
+impl Shortcut {
+    /// One of [`crate::shortcuts`]' as this model's.
+    pub fn of(sc: &egui::KeyboardShortcut) -> Self {
+        let m = sc.modifiers;
+        Self {
+            key: sc.logical_key,
+            command: m.command,
+            shift: m.shift,
+            alt: m.alt,
+        }
+    }
+
+    /// The shortcut as egui has it, for [`crate::shortcuts::text`].
+    pub fn egui(self) -> egui::KeyboardShortcut {
+        let mut m = Modifiers::NONE;
+        m.command = self.command;
+        m.shift = self.shift;
+        m.alt = self.alt;
+        egui::KeyboardShortcut::new(m, self.key)
+    }
+}
+
 /// What the unsaved-changes prompt guards: the action that waits for its answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Then {
@@ -1095,189 +1178,304 @@ impl App {
 
     // ---- drawing ------------------------------------------------------------------------
 
+    /// The app's menus as data. The bar draws them and the iPad turns them into its own menu
+    /// bar (`crates/orb-ios`); an id comes back through [`App::menu_command`].
+    pub fn menus(&mut self, ctx: &Context) -> Vec<Menu> {
+        let live = !self.browsing() && !self.prompting() && !self.error_open();
+        let (std_on, checked) = match &self.mod_list {
+            Some(Ok(list)) => self.mod_checks(list),
+            _ => self.mod_checks(&[]),
+        };
+        let active = match &self.doc.kit {
+            Kit::Mod(p) => Some(p.clone()),
+            Kit::Standard => None,
+        };
+        let mut mods = vec![MenuItem::Choice {
+            id: "kit:standard".into(),
+            title: STANDARD.into(),
+            selected: std_on,
+        }];
+        match &self.mod_list {
+            None => {}
+            Some(Ok(list)) => {
+                for (i, e) in list.iter().enumerate() {
+                    let on = checked == Some(i);
+                    if e.variants.is_empty() {
+                        mods.push(MenuItem::Choice {
+                            id: format!("kit:{}", e.path.display()),
+                            title: e.name.clone(),
+                            selected: on,
+                        });
+                        continue;
+                    }
+                    // mods that share a name: a submenu of files
+                    let pref = self.preferred_variant(e).map(|v| v.path.clone());
+                    let items = e
+                        .variants
+                        .iter()
+                        .map(|v| {
+                            let mut title = v.label();
+                            if pref.as_deref() == Some(v.path.as_path()) {
+                                title.push_str("  (preferred)");
+                            }
+                            MenuItem::Choice {
+                                id: format!("variant:{}", v.path.display()),
+                                title,
+                                selected: active.as_deref() == Some(v.path.as_path()),
+                            }
+                        })
+                        .collect();
+                    mods.push(MenuItem::Submenu {
+                        title: e.name.clone(),
+                        selected: on,
+                        items,
+                    });
+                }
+            }
+            Some(Err(e)) => mods.push(MenuItem::Label(e.clone())),
+        }
+        let demo = live && self.has_demo();
+        mods.push(MenuItem::Separator);
+        mods.push(self.menu_action("mod:choose-file", "Choose file...", live));
+        mods.push(self.menu_action("mod:refresh", "Refresh List", live));
+        mods.push(MenuItem::Separator);
+        mods.push(self.menu_action("mod:demo", "Demo Song", demo));
+        mods.push(self.menu_action("mod:info", "Info...", live));
+
+        let mut file = vec![
+            self.menu_shortcut("new", "New", &shortcuts::NEW, live),
+            self.menu_shortcut("open", "Open...", &shortcuts::OPEN, live),
+            self.menu_shortcut("save", "Save", &shortcuts::SAVE, live),
+            self.menu_action("save-as", "Save As...", live),
+            self.menu_action("info", "Info...", live),
+            MenuItem::Separator,
+        ];
+        file.push(MenuItem::Action {
+            id: "export".into(),
+            title: "Export Loop as Audio File...".into(),
+            shortcut: None,
+            enabled: live && self.panel.transport.song_mode && !self.exporting(),
+            hint: Some("Export needs song mode."),
+        });
+
+        let mut options = vec![
+            MenuItem::Check {
+                id: "vintage".into(),
+                title: "Vintage ReBirth Synth Sound".into(),
+                checked: self.panel.vintage,
+            },
+            MenuItem::Check {
+                id: "startup-sound".into(),
+                title: "Play Mod Startup Sound".into(),
+                checked: self.settings.startup_sound,
+            },
+            MenuItem::Separator,
+        ];
+        for (id, title, sc, mode) in [
+            (
+                "key-mode:synth",
+                "Program Synth",
+                &shortcuts::KEYS_SYNTH,
+                KeyMode::Synth,
+            ),
+            (
+                "key-mode:patterns",
+                "Select Patterns",
+                &shortcuts::KEYS_PATTERNS,
+                KeyMode::Patterns,
+            ),
+        ] {
+            let title = format!("{title} ({})", shortcuts::text(ctx, sc));
+            options.push(MenuItem::Radio {
+                id: id.into(),
+                title,
+                checked: self.key_mode == mode,
+            });
+        }
+
+        vec![
+            Menu {
+                title: "File".into(),
+                items: file,
+                scroll: false,
+            },
+            Menu {
+                title: "Mods".into(),
+                items: mods,
+                scroll: true,
+            },
+            Menu {
+                title: "Options".into(),
+                items: options,
+                scroll: false,
+            },
+            Menu {
+                title: "Help".into(),
+                items: HELP_ITEMS
+                    .iter()
+                    .map(|(title, id)| self.menu_action(id, title, live))
+                    .collect(),
+                scroll: false,
+            },
+        ]
+    }
+
+    /// One command line of a menu.
+    fn menu_action(&self, id: &str, title: &str, enabled: bool) -> MenuItem {
+        MenuItem::Action {
+            id: id.into(),
+            title: title.into(),
+            shortcut: None,
+            enabled,
+            hint: None,
+        }
+    }
+
+    /// One command line of a menu, with its shortcut.
+    fn menu_shortcut(
+        &self,
+        id: &str,
+        title: &str,
+        sc: &egui::KeyboardShortcut,
+        enabled: bool,
+    ) -> MenuItem {
+        MenuItem::Action {
+            id: id.into(),
+            title: title.into(),
+            shortcut: Some(Shortcut::of(sc)),
+            enabled,
+            hint: None,
+        }
+    }
+
+    /// The command a menu id names: the bar and the iPad's menu bar send the same ids.
+    pub fn menu_command(&self, id: &str) -> Option<Cmd> {
+        Some(match id {
+            "new" => Cmd::New,
+            "open" => Cmd::Open,
+            "save" => Cmd::Save,
+            "save-as" => Cmd::SaveAs,
+            "export" => Cmd::Export,
+            "info" => Cmd::Info,
+            "key-help" => Cmd::KeyHelp,
+            "about" => Cmd::About,
+            "mod:choose-file" => Cmd::ChooseModFile,
+            "mod:refresh" => Cmd::RefreshMods,
+            "mod:demo" => Cmd::DemoSong,
+            "mod:info" => Cmd::ModInfo,
+            "kit:standard" => Cmd::UseKit(Kit::Standard),
+            "vintage" => Cmd::ToggleVintage,
+            "startup-sound" => Cmd::ToggleStartupSound,
+            "key-mode:synth" => Cmd::SetKeyMode(KeyMode::Synth),
+            "key-mode:patterns" => Cmd::SetKeyMode(KeyMode::Patterns),
+            other => match other.split_once(':')? {
+                ("kit", path) => Cmd::UseKit(Kit::Mod(PathBuf::from(path))),
+                ("variant", path) => Cmd::ChooseVariant(PathBuf::from(path)),
+                _ => return None,
+            },
+        })
+    }
+
     /// Draws the menu bar and runs what it chooses.
     pub fn menu_bar(&mut self, ui: &mut Ui) {
-        let mut cmd: Option<Cmd> = None;
-        let enabled = !self.browsing() && !self.prompting() && !self.error_open();
+        let menus = self.menus(ui.ctx());
+        let mut chosen: Option<String> = None;
         egui::Panel::top("orb_menu")
             .exact_size(MENU_H)
             .show(ui, |ui| {
-                ui.add_enabled_ui(enabled, |ui| {
-                    egui::MenuBar::new().ui(ui, |ui| {
-                        ui.menu_button("File", |ui| {
-                            if item(ui, "New", Some(&shortcuts::NEW)) {
-                                cmd = Some(Cmd::New);
-                            }
-                            if item(ui, "Open...", Some(&shortcuts::OPEN)) {
-                                cmd = Some(Cmd::Open);
-                            }
-                            if item(ui, "Save", Some(&shortcuts::SAVE)) {
-                                cmd = Some(Cmd::Save);
-                            }
-                            if item(ui, "Save As...", None) {
-                                cmd = Some(Cmd::SaveAs);
-                            }
-                            if item(ui, "Info...", None) {
-                                cmd = Some(Cmd::Info);
-                            }
-                            ui.separator();
-                            let ok = self.panel.transport.song_mode && !self.exporting();
-                            let r = ui
-                                .add_enabled(ok, egui::Button::new("Export Loop as Audio File..."));
-                            let r = if self.panel.transport.song_mode {
-                                r
+                egui::MenuBar::new().ui(ui, |ui| {
+                    for menu in &menus {
+                        ui.menu_button(&menu.title, |ui| {
+                            if menu.scroll {
+                                egui::ScrollArea::vertical()
+                                    .max_height(300.0)
+                                    .show(ui, |ui| draw_items(ui, &menu.items, &mut chosen));
                             } else {
-                                r.on_disabled_hover_text("Export needs song mode.")
-                            };
-                            if r.clicked() {
-                                cmd = Some(Cmd::Export);
-                                ui.close();
+                                draw_items(ui, &menu.items, &mut chosen);
                             }
                         });
-                        ui.menu_button("Mods", |ui| {
-                            let (std_on, checked) = match &self.mod_list {
-                                Some(Ok(l)) => self.mod_checks(l),
-                                _ => self.mod_checks(&[]),
-                            };
-                            if ui.selectable_label(std_on, STANDARD).clicked() {
-                                cmd = Some(Cmd::UseKit(Kit::Standard));
-                                ui.close();
-                            }
-                            match &self.mod_list {
-                                None => {}
-                                Some(Ok(list)) => {
-                                    egui::ScrollArea::vertical()
-                                        .max_height(300.0)
-                                        .show(ui, |ui| {
-                                            for (i, e) in list.iter().enumerate() {
-                                                let on = checked == Some(i);
-                                                if !e.variants.is_empty() {
-                                                    // mods that share a name: a submenu of files
-                                                    let mut b =
-                                                        egui::containers::menu::SubMenuButton::new(
-                                                            &e.name,
-                                                        );
-                                                    b.button = b.button.selected(on);
-                                                    let active = match &self.doc.kit {
-                                                        Kit::Mod(p) => Some(p),
-                                                        Kit::Standard => None,
-                                                    };
-                                                    let pref = self.preferred_variant(e);
-                                                    b.ui(ui, |ui| {
-                                                        for v in &e.variants {
-                                                            let mut t = v.label();
-                                                            if pref.is_some_and(|p| p == v) {
-                                                                t.push_str("  (preferred)");
-                                                            }
-                                                            let me = active == Some(&v.path);
-                                                            if ui.selectable_label(me, t).clicked()
-                                                            {
-                                                                cmd = Some(Cmd::ChooseVariant(
-                                                                    v.path.clone(),
-                                                                ));
-                                                                ui.close();
-                                                            }
-                                                        }
-                                                    });
-                                                    continue;
-                                                }
-                                                if ui.selectable_label(on, &e.name).clicked() {
-                                                    cmd =
-                                                        Some(Cmd::UseKit(Kit::Mod(e.path.clone())));
-                                                    ui.close();
-                                                }
-                                            }
-                                        });
-                                }
-                                Some(Err(e)) => {
-                                    ui.label(RichText::new(e).color(INK_DIM));
-                                }
-                            }
-                            ui.separator();
-                            if item(ui, "Choose file...", None) {
-                                cmd = Some(Cmd::ChooseModFile);
-                            }
-                            if item(ui, "Refresh List", None) {
-                                cmd = Some(Cmd::RefreshMods);
-                            }
-                            ui.separator();
-                            let has_demo = self.has_demo();
-                            let r = ui.add_enabled(has_demo, egui::Button::new("Demo Song"));
-                            if r.clicked() {
-                                cmd = Some(Cmd::DemoSong);
-                                ui.close();
-                            }
-                            if item(ui, "Info...", None) {
-                                cmd = Some(Cmd::ModInfo);
-                            }
-                        });
-                        ui.menu_button("Options", |ui| {
-                            let mut v = self.panel.vintage;
-                            if ui.checkbox(&mut v, "Vintage ReBirth Synth Sound").clicked() {
-                                cmd = Some(Cmd::ToggleVintage);
-                                ui.close();
-                            }
-                            let mut st = self.settings.startup_sound;
-                            if ui.checkbox(&mut st, "Play Mod Startup Sound").clicked() {
-                                cmd = Some(Cmd::ToggleStartupSound);
-                                ui.close();
-                            }
-                            ui.separator();
-                            let ctx = ui.ctx().clone();
-                            let synth = format!(
-                                "Program Synth ({})",
-                                shortcuts::text(&ctx, &shortcuts::KEYS_SYNTH)
-                            );
-                            let patterns = format!(
-                                "Select Patterns ({})",
-                                shortcuts::text(&ctx, &shortcuts::KEYS_PATTERNS)
-                            );
-                            if ui.radio(self.key_mode == KeyMode::Synth, synth).clicked() {
-                                cmd = Some(Cmd::SetKeyMode(KeyMode::Synth));
-                                ui.close();
-                            }
-                            if ui
-                                .radio(self.key_mode == KeyMode::Patterns, patterns)
-                                .clicked()
-                            {
-                                cmd = Some(Cmd::SetKeyMode(KeyMode::Patterns));
-                                ui.close();
-                            }
-                        });
-                        // Last in the bar. An item is one line of `HELP_ITEMS`.
-                        ui.menu_button("Help", |ui| {
-                            for (text, c) in HELP_ITEMS {
-                                if item(ui, text, None) {
-                                    cmd = Some(c.clone());
-                                }
-                            }
-                        });
-                    });
+                    }
                 });
             });
-        if let Some(c) = cmd {
-            self.command(c);
+        if let Some(id) = chosen
+            && let Some(cmd) = self.menu_command(&id)
+        {
+            self.command(cmd);
         }
     }
 }
 
-/// The items of the Help menu, in order.
-const HELP_ITEMS: &[(&str, Cmd)] = &[
-    ("Keyboard Shortcuts...", Cmd::KeyHelp),
-    ("About OpenRB-338...", Cmd::About),
+/// The items of the Help menu, in order: the title and the id of [`App::menu_command`].
+const HELP_ITEMS: &[(&str, &str)] = &[
+    ("Keyboard Shortcuts...", "key-help"),
+    ("About OpenRB-338...", "about"),
 ];
 
-/// A menu item with its shortcut; true when clicked (the menu closes).
-fn item(ui: &mut Ui, text: &str, shortcut: Option<&egui::KeyboardShortcut>) -> bool {
-    let mut b = egui::Button::new(text);
-    if let Some(sc) = shortcut {
-        b = b.shortcut_text(shortcuts::text(ui.ctx(), sc));
+/// Draws the lines of one menu; a click leaves its id in `chosen`.
+fn draw_items(ui: &mut Ui, items: &[MenuItem], chosen: &mut Option<String>) {
+    for item in items {
+        match item {
+            MenuItem::Action {
+                id,
+                title,
+                shortcut,
+                enabled,
+                hint,
+            } => {
+                let mut b = egui::Button::new(title);
+                if let Some(sc) = shortcut {
+                    b = b.shortcut_text(shortcuts::text(ui.ctx(), &sc.egui()));
+                }
+                let r = ui.add_enabled(*enabled, b);
+                let r = match hint {
+                    Some(hint) => r.on_disabled_hover_text(*hint),
+                    None => r,
+                };
+                if r.clicked() {
+                    *chosen = Some(id.clone());
+                    ui.close();
+                }
+            }
+            MenuItem::Check { id, title, checked } => {
+                let mut on = *checked;
+                if ui.checkbox(&mut on, title).clicked() {
+                    *chosen = Some(id.clone());
+                    ui.close();
+                }
+            }
+            MenuItem::Radio { id, title, checked } => {
+                if ui.radio(*checked, title).clicked() {
+                    *chosen = Some(id.clone());
+                    ui.close();
+                }
+            }
+            MenuItem::Choice {
+                id,
+                title,
+                selected,
+            } => {
+                if ui.selectable_label(*selected, title).clicked() {
+                    *chosen = Some(id.clone());
+                    ui.close();
+                }
+            }
+            MenuItem::Submenu {
+                title,
+                selected,
+                items,
+            } => {
+                let mut b = egui::containers::menu::SubMenuButton::new(title);
+                b.button = b.button.selected(*selected);
+                b.ui(ui, |ui| draw_items(ui, items, chosen));
+            }
+            MenuItem::Label(text) => {
+                ui.label(RichText::new(text).color(INK_DIM));
+            }
+            MenuItem::Separator => {
+                ui.separator();
+            }
+        }
     }
-    let clicked = ui.add(b).clicked();
-    if clicked {
-        ui.close();
-    }
-    clicked
 }
 
 /// The order of the Mods menu's top-level entries (task-167): the names with ASCII letters
@@ -1299,6 +1497,7 @@ pub fn mod_name_order(a: &str, b: &str) -> std::cmp::Ordering {
 #[cfg(test)]
 mod tests {
     use super::mod_name_order;
+    use eframe::egui::Context;
 
     fn sorted(names: &[&str]) -> Vec<String> {
         let mut v: Vec<String> = names.iter().map(|s| s.to_string()).collect();
@@ -1323,5 +1522,37 @@ mod tests {
         );
         // no Unicode folding: a non-ASCII letter is above every ASCII one
         assert_eq!(sorted(&["\u{e9}a", "za"]), ["za", "\u{e9}a"]);
+    }
+
+    /// The iPad's menu bar runs the ids of [`App::menus`] through [`App::menu_command`]; an id
+    /// without a command is a menu item that does nothing on the iPad.
+    #[test]
+    fn every_menu_id_names_a_command() {
+        use super::{App, MenuItem};
+        use crate::model::Panel;
+
+        fn walk(items: &[MenuItem], app: &App, count: &mut usize) {
+            for item in items {
+                match item {
+                    MenuItem::Action { id, .. }
+                    | MenuItem::Check { id, .. }
+                    | MenuItem::Radio { id, .. }
+                    | MenuItem::Choice { id, .. } => {
+                        assert!(app.menu_command(id).is_some(), "no command for {id}");
+                        *count += 1;
+                    }
+                    MenuItem::Submenu { items, .. } => walk(items, app, count),
+                    MenuItem::Label(_) | MenuItem::Separator => {}
+                }
+            }
+        }
+
+        let mut app = App::new(Panel::new(), None);
+        let menus = app.menus(&Context::default());
+        let mut count = 0;
+        for menu in &menus {
+            walk(&menu.items, &app, &mut count);
+        }
+        assert_eq!(count, 17, "the items of the four menus");
     }
 }

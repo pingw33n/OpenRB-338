@@ -175,10 +175,12 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(TITLE).color(AMBER).strong().size(15.0));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        // the cross is small, the target is not: a finger needs 44 points
+                        let size = if cfg!(target_os = "ios") { 44.0 } else { 18.0 };
                         let (rect, r) =
-                            ui.allocate_exact_size(egui::vec2(18.0, 18.0), Sense::click());
+                            ui.allocate_exact_size(egui::vec2(size, size), Sense::click());
                         let color = if r.hovered() { AMBER } else { INK_DIM };
-                        let c = rect.shrink(5.0);
+                        let c = rect.shrink(if cfg!(target_os = "ios") { 13.0 } else { 5.0 });
                         let stroke = Stroke::new(1.5, color);
                         ui.painter()
                             .line_segment([c.left_top(), c.right_bottom()], stroke);

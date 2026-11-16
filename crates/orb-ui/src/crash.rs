@@ -39,7 +39,7 @@ pub fn log_dir() -> Option<PathBuf> {
 }
 
 /// [`log_dir`] for the system `os` (`std::env::consts::OS`) and an environment lookup:
-/// - macOS: `~/Library/Logs/OpenRB-338`;
+/// - macOS and iOS: `~/Library/Logs/OpenRB-338`;
 /// - Windows: `%LOCALAPPDATA%\OpenRB-338\logs`;
 /// - others: `$XDG_STATE_HOME/OpenRB-338` or `~/.local/state/OpenRB-338`.
 ///
@@ -50,7 +50,7 @@ pub fn platform_dir(os: &str, env: impl Fn(&str) -> Option<OsString>) -> Option<
         return Some(p);
     }
     match os {
-        "macos" => get("HOME").map(|h| h.join("Library/Logs/OpenRB-338")),
+        "macos" | "ios" => get("HOME").map(|h| h.join("Library/Logs/OpenRB-338")),
         "windows" => get("LOCALAPPDATA").map(|l| l.join("OpenRB-338").join("logs")),
         _ => get("XDG_STATE_HOME")
             .or_else(|| get("HOME").map(|h| h.join(".local/state")))
@@ -271,6 +271,7 @@ fn handle(version: &str, info: &PanicHookInfo) {
             "OpenRB-338: the crash log could not be saved: {e}"
         )),
     }
+    #[cfg(not(target_os = "ios"))]
     if !no_dialog() {
         let _ = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
