@@ -35,7 +35,7 @@ SONGS_ZIP = "https://github.com/pingw33n/rb-songs/archive/refs/heads/main.zip"
 MODS_ZIP = "https://github.com/pingw33n/rb-mods/archive/refs/heads/main.zip"
 # GitHub makes these two zips on request and sends no length, so the sizes are written here:
 # rb-songs measured 8,275,852 bytes on 2026-11-18, rb-mods is the task's figure.
-SONGS_DETAIL = ".zip, about 30 MB"
+SONGS_DETAIL = ".zip, about 35 MB"
 MODS_DETAIL = ".zip, about 1 GB"
 
 MAC = {"arm64": "aarch64-apple-darwin", "x64": "x86_64-apple-darwin"}

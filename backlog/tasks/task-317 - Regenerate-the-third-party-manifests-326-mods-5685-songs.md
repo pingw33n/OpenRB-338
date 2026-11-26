@@ -1,10 +1,11 @@
 ---
 id: TASK-317
 title: 'Regenerate the third-party manifests: 326 mods, 5,685 songs'
-status: To Do
+status: Done
 assignee:
   - '@agent-worker'
 created_date: '2026-11-26T17:51:00Z'
+updated_date: '2026-11-26T18:55:00Z'
 labels:
   - tests
   - tools
@@ -40,9 +41,29 @@ Read only: never modify, commit to or delete anything in ~/rb-songs or ~/rb-mods
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 tests/refs/thirdparty_mods.json lists all 326 mods of ~/rb-mods at bfbd8c9; GreenMachine and SKYLINE are marked original false
-- [ ] #2 tests/refs/thirdparty_songs.json lists every song file of ~/rb-songs at 6e0b92e with an rbhost render hash; no skipped entries
-- [ ] #3 cargo test --release -p orb-cli --test thirdparty passes with both variables set: orb equals rbhost on every song and every mod loads
-- [ ] #4 README.md, docs/rbm.md 11 and 11.5 and (if the rounded size changed) the site's collection captions give the new numbers
-- [ ] #5 cargo test --workspace, clippy -D warnings and nightly fmt --check pass
+- [x] #1 tests/refs/thirdparty_mods.json lists all 326 mods of ~/rb-mods at bfbd8c9; GreenMachine and SKYLINE are marked original false
+- [x] #2 tests/refs/thirdparty_songs.json lists every song file of ~/rb-songs at 6e0b92e with an rbhost render hash; no skipped entries
+- [x] #3 cargo test --release -p orb-cli --test thirdparty passes with both variables set: orb equals rbhost on every song and every mod loads
+- [x] #4 README.md, docs/rbm.md 11 and 11.5 and (if the rounded size changed) the site's collection captions give the new numbers
+- [x] #5 cargo test --workspace, clippy -D warnings and nightly fmt --check pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Method of task-311: mods manifest with --keep; stale check (856 new, 0 resolution/mod changes); render the 856 with thirdparty_songs.py --remote-dir t317; thirdparty cargo test; counts; sizes.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Branch: worktree-agent-a1e6c4dc1569ba4cb
+
+The sandbox refused version-control commands inside ~/rb-songs and ~/rb-mods; used plain reads (files and counts match the task: 326 mods, 5685 .rbs). Mods: thirdparty_mods_manifest.py --mods ~/rb-mods/mods --dat ~/win_exchange/RB20FUL.DAT --keep old --orb target/release/orb -> '326 mods'; diff = 2 added lines (GreenMachine, SKYLINE, original:false). Stale check: 5685 distinct, 856 new (852 + 4 changed), 0 resolution changes, 0 pinned-mod changes (its DJM.RBM hit is a script artifact: it lists only .rbm, the file is DJM.RBM, unchanged), 5 old entries gone (4 moved-changed + epriori); moved-unchanged keep entries (paths refreshed). Render: thirdparty_songs.py --songs ~/rb-songs/songs --mods ~/rb-mods/mods --rb20ful ~/win_exchange/RB20FUL.DAT --remote-dir t317: 19:55-20:27, 856 songs, '5685 songs rendered, 0 skipped', permit released (locky list: 6 of 6 available), remote folder deleted by the tool. Non-ASCII name wave.al.ru/№1.rbs handled. Test: both variables, cargo test --release -p orb-cli --test thirdparty: 'mods: 326 checked, 326 load, 0 fail'; 'songs: 5685 ... 5685 renders equal rbhost's, 0 not compared'; 2 passed (977 s). No orb/rbhost difference. Counts: 754 1x, 4931 RBS (3879 4.2, 1040 4.1, 12 4.0), 3054 play a mod, 135 mods (new mods unused), 1877 builtin RBS of which 1772 Standard. Sizes (zip of the working tree without the repo metadata folder and .DS_Store, deflate; an archive of the commit was not possible): songs 34.9 MB (caption 30 -> 35 MB), mods 1027.9 MB (about 1 GB unchanged); build_site_test has no 30 MB literal. workspace tests 1181 pass, clippy clean, nightly fmt clean, tools unit tests ok.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Both manifests regenerated for the 2026-11-26 collections: thirdparty_mods.json lists 326 mods (2 new, GreenMachine and SKYLINE, original:false); thirdparty_songs.json lists 5685 songs (856 rendered new by rbhost in about 32 min, 5 gone dropped), 0 skipped. orb equals rbhost on all 5685 and all 326 mods load (thirdparty test 2 passed). README (3,054 songs on 135 mods) and docs/rbm.md 11/11.5 updated; the songs caption of the site is now about 35 MB (34.9 MB measured), the mods caption stays about 1 GB. Workspace 1181 tests, clippy, nightly fmt clean.
+<!-- SECTION:FINAL_SUMMARY:END -->
