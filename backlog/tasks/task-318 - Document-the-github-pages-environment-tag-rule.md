@@ -1,10 +1,11 @@
 ---
 id: TASK-318
 title: Document the github-pages environment tag rule
-status: To Do
+status: Done
 assignee:
   - '@agent-chore'
 created_date: '2026-11-26T18:30:00Z'
+updated_date: '2026-11-26T19:01:00Z'
 labels:
   - docs
 milestone: m-5
@@ -30,6 +31,31 @@ ordinal: 289700
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 docs/building.md names both one-time settings, the environment's tag rule v* and the manual deploy when it is missing
-- [ ] #2 pages.yml's header comment mentions the environment's tag rule
+- [x] #1 docs/building.md names both one-time settings, the environment's tag rule v* and the manual deploy when it is missing
+- [x] #2 pages.yml's header comment mentions the environment's tag rule
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. docs/building.md: add the second one-time-setting bullet after the "The user's one-time setting" bullet (line 1133-1135), wrapped to the surrounding 100-column text, with the exact wording of the task (tag rule v*, the manual deploy with Run workflow on main and the tag).
+2. .github/workflows/pages.yml: add the tag-rule sentence to the header comment after the Source sentence (lines 8-9), as # comment lines within 100 columns.
+3. Check the diff (no cargo: docs only), check the two ACs with evidence, write the final summary, set Done, one commit with the subject 'docs: the github-pages environment needs the tag rule v*'.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Branch: worktree-agent-aa7ace5112ddd7d54 (worktree /Users/pingw33n/dev/OpenRB-338/.claude/worktrees/agent-aa7ace5112ddd7d54).
+
+Done in the worktree (docs only, no cargo run):
+- docs/building.md: new bullet 'The user's second one-time setting' after the 'The user's one-time setting' bullet (new lines 1136-1142): the github-pages environment's Deployment branches and tags need main and the tag rule v*, the failure message, and the manual deploy with Run workflow on main and the release's tag.
+- .github/workflows/pages.yml: 2 header comment lines after the Source sentence (new lines 10-11) naming the tag rule v*.
+- Checked: git diff adds 23 lines in 3 files; every added docs and workflow line is at most 100 columns (awk check on the + lines).
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added the tag rule to the docs: docs/building.md names the second one-time setting (the github-pages environment's tag rule v*, and the manual deploy when it is missing), and .github/workflows/pages.yml's header comment mentions the same rule. Docs only: no test run. Branch worktree-agent-aa7ace5112ddd7d54, one commit. Lines within 100 columns.
+<!-- SECTION:FINAL_SUMMARY:END -->

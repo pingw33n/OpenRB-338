@@ -7,6 +7,8 @@
 #
 # One-time setting (docs/building.md): Settings > Pages > Source: GitHub Actions. Until it is
 # set, the deploy job fails at deploy-pages with "Pages site not found / not enabled".
+# Also the github-pages environment must allow the tag rule v* (Settings > Environments), or a
+# published release's deploy is refused.
 name: pages
 
 on:

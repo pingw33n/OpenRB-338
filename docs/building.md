@@ -1133,6 +1133,12 @@ No framework, no build tool beyond `tools/build_site.py`.
 - **The user's one-time setting:** Settings > Pages > Build and deployment > Source: GitHub
   Actions. Until it is set, the `deploy` job fails at `deploy-pages` with an error that Pages is
   not enabled for the repository.
+- **The user's second one-time setting:** Settings > Environments > github-pages > Deployment
+  branches and tags: the branch `main` (for a run by hand) and the tag rule `v*` (a run on a
+  published release runs on its tag). Without the tag rule the `deploy` job of a published
+  release fails with "Tag ... is not allowed to deploy to github-pages due to environment
+  protection rules"; deploy by hand then with Run workflow on `main` and the release's tag
+  (task-318).
 
 ## The plugin (task-204)
 
