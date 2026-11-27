@@ -1,10 +1,11 @@
 ---
 id: TASK-170
 title: 'Decide: the web version''s audio path, threading and export formats'
-status: To Do
+status: Done
 assignee:
   - '@pingw33n'
-created_date: '2026-11-03 09:16'
+created_date: 2026-11-03 09:16
+updated_date: '2026-11-27T07:39:00Z'
 labels:
   - decision
   - ui
@@ -40,5 +41,15 @@ Also to settle:
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The user has chosen the audio path (A, B, C or another) and the answers to the export, settings and sample-rate questions; the final summary records them with the date
+- [x] #1 The user has chosen the audio path (A, B, C or another) and the answers to the export, settings and sample-rate questions; the final summary records them with the date
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Decided by the user on 2026-11-27: the recommendations are accepted.
+- Audio path: C. The engine runs in an AudioWorklet as its own wasm instance (orb-engine only); the UI talks to it with postMessage (commands one way, state snapshots back), no shared memory, stable toolchain, no cross-origin isolation headers. The native orb-player path stays as is.
+- Export on the web: WAV and FLAC; Ogg is hidden. The export runs on the main thread in slices per frame with the progress shown, then the browser downloads the file.
+- Settings (recent files, preferences) in localStorage instead of the settings file; the crash log becomes a console message plus the error box.
+- Sample rate: the AudioContext is created at 44100 Hz; only if a browser refuses, fall back to the device rate with the existing resampler.
+<!-- SECTION:FINAL_SUMMARY:END -->
