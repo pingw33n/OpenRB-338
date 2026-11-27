@@ -17,19 +17,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
+use crate::devices;
+pub use crate::devices::Request;
+use crate::resample::Resample;
+use crate::{Audio, RATE};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{
     BufferSize, ErrorKind, FromSample, SampleFormat, SizedSample, StreamConfig, SupportedBufferSize,
 };
-use rubato::audioadapter_buffers::direct::InterleavedSlice;
-use rubato::{
-    Async, FixedAsync, Resampler as _, SincInterpolationParameters, SincInterpolationType,
-    WindowFunction,
-};
-
-use crate::devices;
-pub use crate::devices::Request;
-use crate::{Audio, CALL_FRAMES, RATE};
 
 /// The frames converted per step of a device callback.
 const SCRATCH_FRAMES: usize = 1024;
@@ -399,88 +394,6 @@ pub struct Output {
     scratch: Box<[f32; 2 * SCRATCH_FRAMES]>,
 }
 
-/// The resampler and its buffers.
-struct Resample {
-    rs: Async<f32>,
-    input: Vec<f32>,
-    output: Vec<f32>,
-    /// The frames of `output` the last chunk produced, and those already handed out.
-    len: usize,
-    pos: usize,
-    /// [`Output::inject_resampler_error`].
-    fail_next: bool,
-}
-
-impl Resample {
-    fn new(rate: u32) -> Result<Self, Error> {
-        let params = SincInterpolationParameters::new(128, WindowFunction::BlackmanHarris2)
-            .oversampling_factor(256)
-            .interpolation(SincInterpolationType::Cubic);
-        let rs = Async::<f32>::new_sinc(
-            rate as f64 / RATE as f64,
-            1.1,
-            &params,
-            CALL_FRAMES,
-            2,
-            FixedAsync::Input,
-        )
-        .map_err(|e| err("the resampler", e))?;
-        let max = rs.output_frames_max();
-        Ok(Resample {
-            rs,
-            input: vec![0.0; 2 * CALL_FRAMES],
-            output: vec![0.0; 2 * max],
-            len: 0,
-            pos: 0,
-            fail_next: false,
-        })
-    }
-
-    /// One engine call through the resampler into `output`; the frames written, or `None` when
-    /// the buffers or the resampler refuse (the sizes are the resampler's own, so only a defect
-    /// or [`Output::inject_resampler_error`] gets there).
-    fn chunk(&mut self, audio: &mut Audio) -> Option<usize> {
-        audio.render_f32(&mut self.input);
-        // a forced error: an output buffer too small for the resampler
-        let max = if self.fail_next {
-            self.fail_next = false;
-            0
-        } else {
-            self.output.len() / 2
-        };
-        let inp = InterleavedSlice::new(&self.input[..], 2, CALL_FRAMES).ok()?;
-        let mut outp = InterleavedSlice::new_mut(&mut self.output[..], 2, max).ok()?;
-        let (_, written) = self.rs.process_into_buffer(&inp, &mut outp, None).ok()?;
-        Some(written)
-    }
-
-    /// Fills `out` (interleaved stereo) at the device rate. On a resampler error it returns
-    /// `false` and the caller silences the rest of the device callback; the engine call of the
-    /// failed chunk is lost and the next callback starts a new chunk.
-    fn pull(&mut self, audio: &mut Audio, out: &mut [f32]) -> bool {
-        let frames = out.len() / 2;
-        let mut i = 0;
-        while i < frames {
-            if self.pos == self.len {
-                self.pos = 0;
-                match self.chunk(audio) {
-                    Some(n) => self.len = n,
-                    None => {
-                        self.len = 0;
-                        return false;
-                    }
-                }
-                continue;
-            }
-            let n = (self.len - self.pos).min(frames - i);
-            out[2 * i..2 * (i + n)].copy_from_slice(&self.output[2 * self.pos..2 * (self.pos + n)]);
-            self.pos += n;
-            i += n;
-        }
-        true
-    }
-}
-
 impl Output {
     /// `audio` for a device of `channels` channels at `rate` Hz (resampled unless 44100).
     pub fn new(audio: Audio, channels: usize, rate: u32) -> Result<Self, Error> {
@@ -498,7 +411,9 @@ impl Output {
         if rate == RATE {
             Ok(None)
         } else {
-            Resample::new(rate).map(Some)
+            Resample::new(rate)
+                .map(Some)
+                .map_err(|e| err("the resampler", e))
         }
     }
 

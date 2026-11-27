@@ -1,0 +1,15 @@
+[package]
+name = "orb-worklet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The web player's AudioWorklet instance (task-171): orb-player's worklet host behind a C ABI"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Without the feature `web`: this module imports nothing (no wasm-bindgen), so the worklet
+# instantiates it from its bytes alone (docs/web.md).
+orb-player = { path = "../orb-player" }

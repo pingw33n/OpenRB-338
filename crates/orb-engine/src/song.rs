@@ -139,6 +139,24 @@ impl Globals {
         b[22] = self.byte22;
         b
     }
+
+    /// The globals of a msg 36 payload ([`Globals::payload`] read back).
+    pub fn from_payload(b: &[u8; Self::PAYLOAD_LEN]) -> Globals {
+        let u32_at = |i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        Globals {
+            song_mode: b[0],
+            play: b[1],
+            byte2: b[2],
+            loop_on: b[3],
+            tempo: u32_at(4),
+            locate: u32_at(8),
+            loop_start: u32_at(12),
+            loop_end: u32_at(16),
+            shuffle: b[20],
+            vintage: b[21],
+            byte22: b[22],
+        }
+    }
 }
 
 /// One mixer channel. Channel c is 0 TB-303 #1, 1 TB-303 #2, 2 TR-808, 3 TR-909.
@@ -474,9 +492,66 @@ impl Song {
     }
 }
 
+/// What [`crate::frame::Engine::load`] reads of a song: the load's messages are made of these
+/// alone. [`Song`] is one; the web player's worklet (orb-player, task-171) rebuilds a song from
+/// these parts, sent from the UI's wasm instance, and loads it the same way.
+pub trait LoadSource {
+    /// The reader that built the song, which decides the device messages.
+    fn form(&self) -> LoadForm;
+    /// The msg 36 globals.
+    fn globals(&self) -> &Globals;
+    /// The msg 41 data block of `dev` ([`Song::device_payload`]); asked only for the devices of
+    /// [`LoadForm::device_blocks`].
+    fn device_payload(&self, dev: Device) -> Vec<u8>;
+    /// The tracks by number, as [`Song::tracks`].
+    fn tracks(&self) -> &[Vec<TrackEvent>; 9];
+    /// The msg-37 batches, as [`Song::batches`].
+    fn batches(&self) -> &[Batch];
+}
+
+impl LoadSource for Song {
+    fn form(&self) -> LoadForm {
+        self.form
+    }
+
+    fn globals(&self) -> &Globals {
+        &self.globals
+    }
+
+    fn device_payload(&self, dev: Device) -> Vec<u8> {
+        Song::device_payload(self, dev)
+    }
+
+    fn tracks(&self) -> &[Vec<TrackEvent>; 9] {
+        &self.tracks
+    }
+
+    fn batches(&self) -> &[Batch] {
+        &self.batches
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn globals_payload_round_trip() {
+        let g = Globals {
+            song_mode: 1,
+            play: 0,
+            byte2: 2,
+            loop_on: 1,
+            tempo: 123_456,
+            locate: 0x0102_0304,
+            loop_start: 768,
+            loop_end: 0xFFFF_FFF0,
+            shuffle: 77,
+            vintage: 3,
+            byte22: 1,
+        };
+        assert_eq!(Globals::from_payload(&g.payload()), g);
+    }
 
     #[test]
     fn units() {

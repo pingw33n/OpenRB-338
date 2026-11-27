@@ -1,0 +1,132 @@
+<!doctype html>
+<!-- The web player's test page (task-171, docs/web.md). Built and served by scripts/web-demo.sh. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenRB-338 web player test</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 2em; max-width: 60em; }
+  button, select, input { font: inherit; margin: 0.2em; }
+  pre { background: #f4f4f4; padding: 1em; white-space: pre-wrap; }
+  .note { color: #555; }
+</style>
+</head>
+<body>
+<h1>OpenRB-338 web player test</h1>
+<p class="note">The engine runs in an AudioWorklet (its own wasm instance) at 44.1 kHz; this page
+talks to it with postMessage. The first click or key press starts the audio.</p>
+<p>
+  <select id="song"></select>
+  <button id="load">Open</button>
+  <input id="file" type="file" accept=".rbs">
+</p>
+<p>
+  <button id="play">Play</button>
+  <button id="stop">Stop</button>
+  Tempo <input id="tempo" type="range" min="60" max="200" step="1" value="120">
+  <span id="bpm">120</span> BPM
+  <button id="sweep">Tempo latency x20</button>
+</p>
+<p>
+  Busy main thread for <input id="busyms" type="number" value="3000" min="100" step="100"> ms
+  <button id="busy">Busy</button>
+  <button id="jank">Busy 40 ms every 50 ms for 5 s</button>
+</p>
+<pre id="state">loading...</pre>
+<pre id="log"></pre>
+<script type="module">
+import init, { start, Demo } from "./pkg/orb_web_demo.js";
+
+const $ = (id) => document.getElementById(id);
+const log = (s) => { $("log").textContent += s + "\n"; };
+let demo = null;
+let last = null;
+let busyReport = null;
+
+await init();
+try {
+  demo = await start("./orb_worklet.wasm");
+} catch (e) {
+  $("state").textContent = "start failed: " + e;
+  throw e;
+}
+window.orbDemo = demo;
+Demo.songs().forEach((n, i) => {
+  const o = document.createElement("option");
+  o.value = i; o.textContent = n; $("song").appendChild(o);
+});
+demo.load_builtin(0);
+
+// every gesture also resumes the context (the output resumes it on its own too)
+const resume = () => { try { demo.resume(); } catch (_) {} };
+$("load").onclick = () => { resume(); demo.load_builtin(Number($("song").value)); };
+$("file").onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try { demo.load_file(new Uint8Array(await f.arrayBuffer())); log("opened " + f.name); }
+  catch (err) { log("open failed: " + err); }
+};
+$("play").onclick = () => { resume(); demo.play(); };
+$("stop").onclick = () => demo.stop();
+$("tempo").oninput = (e) => { $("bpm").textContent = e.target.value; demo.set_tempo(Number(e.target.value)); };
+
+// 20 tempo changes, one each 300 ms, each timed until the snapshot shows it
+$("sweep").onclick = async () => {
+  for (let i = 0; i < 20; i++) {
+    demo.set_tempo(i % 2 ? 121 : 120);
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  const s = JSON.parse(demo.poll());
+  log(`tempo latency over ${s.latencyCount}: min ${s.latencyMinMs} mean ${s.latencyMeanMs} max ${s.latencyMaxMs} ms`);
+};
+
+const spin = (ms) => { const t = performance.now() + ms; while (performance.now() < t) {} };
+const statsOf = (ctx) => ctx.playbackStats ?? ctx.playoutStats ?? null;
+const statsJson = (ctx) => {
+  const p = statsOf(ctx);
+  if (!p) return null;
+  const o = {};
+  for (const k in p) if (typeof p[k] !== "function") o[k] = p[k];
+  return o;
+};
+const report = (what, before) => {
+  const s = JSON.parse(demo.poll());
+  log(`${what}: frames ${before.frames} -> ${s.frames} (${((s.frames - before.frames) / 44100).toFixed(2)} s of audio), ` +
+      `worklet ${JSON.stringify(s.worklet)}, playout stats ${JSON.stringify(statsJson(demo.context()))}`);
+};
+$("busy").onclick = () => {
+  const ms = Number($("busyms").value);
+  const before = JSON.parse(demo.poll());
+  const t0 = performance.now();
+  spin(ms);
+  const t1 = performance.now();
+  setTimeout(() => report(`busy ${(t1 - t0).toFixed(0)} ms`, before), 1100);
+};
+$("jank").onclick = () => {
+  const before = JSON.parse(demo.poll());
+  const end = performance.now() + 5000;
+  const step = () => {
+    spin(40);
+    if (performance.now() < end) setTimeout(step, 10);
+    else setTimeout(() => report("jank 5 s", before), 1100);
+  };
+  step();
+};
+
+const tick = () => {
+  last = demo.poll();
+  const s = JSON.parse(last);
+  s.playoutStats = statsJson(demo.context());
+  s.outputLatency = demo.context().outputLatency ?? null;
+  s.visibility = document.visibilityState;
+  $("state").textContent = JSON.stringify(s, null, 1);
+  requestAnimationFrame(tick);
+};
+// the latency is timed by a poll every 2 ms, not by the animation frames
+setInterval(() => demo.poll(), 2);
+requestAnimationFrame(tick);
+document.addEventListener("visibilitychange", () => log(`${new Date().toISOString()} visibility ${document.visibilityState}, context ${demo.context().state}`));
+demo.context().onstatechange = () => log(`${new Date().toISOString()} context ${demo.context().state}`);
+</script>
+</body>
+</html>

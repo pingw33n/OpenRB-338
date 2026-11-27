@@ -111,4 +111,8 @@ jobs:
         with:
           key: wasm
       - run: cargo build --locked --target wasm32-unknown-unknown -p orb-engine -p rbs -p rbm
+      # The web player (task-171, docs/web.md): the worklet's module apart from the page's, so
+      # that orb-player's feature `web` stays out of it.
+      - run: cargo build --locked --target wasm32-unknown-unknown -p orb-player -p orb-worklet
+      - run: cargo build --locked --target wasm32-unknown-unknown -p orb-web-demo
       - run: scripts/wasm-check.sh

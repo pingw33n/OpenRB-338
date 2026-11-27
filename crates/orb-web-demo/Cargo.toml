@@ -1,0 +1,21 @@
+[package]
+name = "orb-web-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The web player's test page (task-171): a corpus song through the AudioWorklet output"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Everything is wasm32 only (the crate is empty elsewhere); scripts/web-demo.sh builds it.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+orb-player = { path = "../orb-player", features = ["web"] }
+orb-engine = { path = "../orb-engine" }
+rbs = { path = "../rbs" }
+rbm = { path = "../rbm" }
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "=0.4.79"
+js-sys = "=0.3.106"
+web-sys = { version = "=0.3.106", features = ["AudioContext", "BaseAudioContext", "Performance", "Window", "console"] }

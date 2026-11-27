@@ -98,6 +98,26 @@ impl Pool {
         }
     }
 
+    /// A pool whose list k holds `lists[k]` (the lists past `lists.len()` empty), with the
+    /// capacity of [`Pool::new`]: a copy of a pool's lists made elsewhere, such as the web
+    /// player's tracks rebuilt from the worklet's message (orb-player, task-171).
+    ///
+    /// # Panics
+    /// If there are more than [`LISTS`] lists.
+    pub fn from_lists<'a>(lists: impl IntoIterator<Item = &'a [Event]>) -> Pool {
+        let mut p = Pool::new();
+        let mut k = 0;
+        for l in lists {
+            assert!(k < LISTS, "more than {LISTS} lists");
+            p.nodes.extend_from_slice(l);
+            p.ends[k] = p.nodes.len();
+            k += 1;
+        }
+        let end = p.nodes.len();
+        p.ends[k..].fill(end);
+        p
+    }
+
     fn start(&self, k: usize) -> usize {
         if k == 0 { 0 } else { self.ends[k - 1] }
     }

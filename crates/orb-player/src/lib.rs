@@ -88,11 +88,30 @@
 //!
 //! [`midi`] turns timed MIDI bytes into these commands with the original's Standard Mapping
 //! (task-182, `docs/standard_midi_mapping.md`), whatever the source of the bytes.
+//!
+//! # The web
+//!
+//! In the browser (task-171, task-170's path C, `docs/web.md`) the engine runs in an
+//! AudioWorklet as its own wasm instance and the UI talks to it by messages: [`remote::Player`]
+//! is the UI half, with the methods of [`Player`] the UI uses, and [`worklet::Host`] the
+//! worklet's half, which owns a [`Player`] and its [`Audio`]; [`wire`] is their message format.
+//! All three build on every target (the native tests run them in a loopback). The browser glue
+//! is `web` (wasm32 with the feature `web`). cpal's output (`output`, `devices`,
+//! `control`) is native only.
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod control;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod devices;
 pub mod midi;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod output;
+pub mod remote;
+mod resample;
+#[cfg(all(target_arch = "wasm32", feature = "web"))]
+pub mod web;
+pub mod wire;
+pub mod worklet;
 
 use std::sync::Arc;
 
@@ -104,7 +123,7 @@ use orb_engine::frame::{
 use orb_engine::process::ProcessState;
 use orb_engine::samples::{Retired, STARTUP_ID, Sample, SampleSet};
 use orb_engine::seq::Pool;
-use orb_engine::song::{Device, Song};
+use orb_engine::song::{Device, LoadSource, Song};
 use orb_engine::tables::Tables;
 
 /// The engine's output rate.
@@ -332,6 +351,18 @@ pub struct ModSwap {
 }
 
 impl ModSwap {
+    pub(crate) fn new(samples: Arc<SampleSet>) -> Self {
+        ModSwap {
+            samples,
+            retired: Retired::default(),
+        }
+    }
+
+    /// The sample set the change brings.
+    pub fn samples(&self) -> &Arc<SampleSet> {
+        &self.samples
+    }
+
     /// What the change let go of: the old sample tables and the samples the voices held (empty
     /// before it ran, or when the song's drum machines were silent placeholders).
     pub fn retired(&self) -> &Retired {
@@ -372,6 +403,9 @@ impl LiveBlock {
     fn set(&mut self, b: &[u8]) {
         let n = b.len().min(Self::MAX);
         self.bytes[..n].copy_from_slice(&b[..n]);
+        // the bytes past the block are zero, so that equal blocks compare equal (the web
+        // player's snapshot, rebuilt from the block alone, task-171)
+        self.bytes[n..].fill(0);
         self.len = n as u8;
     }
 
@@ -590,6 +624,15 @@ impl Player {
         song: &Song,
         samples: Option<Arc<SampleSet>>,
     ) -> Result<Box<Engine>, LoadRefused> {
+        self.build_from(song, samples)
+    }
+
+    /// [`Player::build`] from the parts of a song the load reads (the web worklet's songs).
+    pub(crate) fn build_from(
+        &self,
+        song: &impl LoadSource,
+        samples: Option<Arc<SampleSet>>,
+    ) -> Result<Box<Engine>, LoadRefused> {
         let mut e = Box::new(Engine::new(
             self.tables.clone(),
             Devices::implemented_with(samples, self.process.clone()),
@@ -615,10 +658,7 @@ impl Player {
 
     /// [`Command::Mod`] with `samples`: the newest song's drum machines take them (song msg 19).
     pub fn set_mod(&mut self, samples: Arc<SampleSet>) -> Result<(), Command> {
-        self.send(Command::Mod(Box::new(ModSwap {
-            samples,
-            retired: Retired::default(),
-        })))
+        self.send(Command::Mod(Box::new(ModSwap::new(samples))))
     }
 
     /// [`Command::Preview`] with the startup sound of `samples` (slot 46, resource ID 1024, the

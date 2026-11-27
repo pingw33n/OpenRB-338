@@ -155,6 +155,7 @@ The Windows build of OpenRB-338 is a GUI-subsystem exe (task-111), see "The Wind
 | `scripts/package.sh TARGET` | `build.sh`, then packs `dist/<target>/OpenRB-338-<YYYY.MMDD.HHMM>-<target>.tar.gz|zip` (`SKIP_BUILD=1` packs the existing `bin/`) |
 | `scripts/validate-plugin.sh [DIR]` | downloads the pinned pluginval and runs it on `OpenRB-338.vst3` in `DIR` (default `target/bundled`); exit 1 on a failure (below, "The plugin") |
 | `scripts/wasm-check.sh` | renders the corpus natively and on wasm32-wasip1 under the pinned wasmtime and requires equal SHA-256s; exit 1 on a difference (below, "The wasm build") |
+| `scripts/web-demo.sh [--serve [PORT]]` | builds the web player's worklet module and test page into `target/web-demo/` and serves it at `http://localhost:PORT/` (below, "The web player") |
 | `scripts/build-all.sh [TARGET...]` | packages every target practical from this machine, and lists the skipped and failed ones |
 | `scripts/package-dmg.sh` | `scripts/package-dmg.sh TARGET` (a macOS target) builds it, then `dist/<target>/OpenRB-338-<YYYY.MMDD.HHMM>-<target>.dmg` (`SKIP_BUILD=1` uses the existing `bin/` folder) |
 | `scripts/package-installer.sh TARGET` | `build.sh` for a Windows target, then `dist/<target>/OpenRB-338-<YYYY.MMDD.HHMM>-<x64\|arm64>-setup.exe` with NSIS (`SKIP_BUILD=1` uses the existing `bin/`; `MAKENSIS` names makensis) |
@@ -504,6 +505,30 @@ requires the two outputs to be identical and every line `equal`; exit 1 otherwis
   `ORB_CD_ISO`, 175 songs, native 3 s, wasm 15 s. All equal to native and to the manifest.
 - CI: the job `wasm` of `ci.yml` (below).
 
+## The web player (task-171)
+
+The web audio path is described in `docs/web.md`. What builds it:
+
+- `orb-player` builds for `wasm32-unknown-unknown` (cpal and its modules `output`, `devices`
+  and `control` are native only). Its feature `web` (wasm32 only) adds the browser glue,
+  `orb_player::web`, with `wasm-bindgen` 0.2.129, `wasm-bindgen-futures` 0.4.79, `js-sys` and
+  `web-sys` 0.3.106, pinned with `=` to the versions of `Cargo.lock`.
+- `crates/orb-worklet`: the AudioWorklet's module, a plain wasm module with a C ABI that imports
+  nothing (built without the feature `web`; no wasm-bindgen step).
+- `crates/orb-web-demo`: the test page's module (wasm-bindgen) and `index.html`.
+- `scripts/web-demo.sh [--serve [PORT]]` builds both in release, in two cargo runs (one run
+  would unify the feature `web` into the worklet's module), runs wasm-bindgen on the page's
+  module into `target/web-demo/` and with `--serve` serves that folder at
+  `http://localhost:PORT/` (default 8338) with `python3 -m http.server`.
+- **wasm-bindgen-cli** must be the version of the lockfile's `wasm-bindgen`, 0.2.129: `cargo
+  install wasm-bindgen-cli --version 0.2.129 --locked` (per user, into `~/.cargo/bin`). The
+  script checks the version. A `cargo update` of wasm-bindgen is an edit of the `=` pins in
+  `crates/orb-player/Cargo.toml` and `crates/orb-web-demo/Cargo.toml`, of the script and of this
+  paragraph.
+- Sizes (2026-11-27): `orb_worklet.wasm` 321 KB; the page's module 3.1 MB (it embeds the
+  built-in kit and three shipped songs).
+- CI: the job `wasm` builds `-p orb-player -p orb-worklet` and `-p orb-web-demo` for wasm32.
+
 ## GitHub Actions (`.github/workflows/`)
 
 Decisions of the user (2026-10-28): the cost of six release package jobs and the three-OS CI
@@ -547,7 +572,8 @@ Actions are pinned to a commit SHA (the version in a comment). No workflow uses 
     runs `scripts/validate-plugin.sh` (pluginval) and `scripts/test-pkg-scripts.sh` (the macOS
     plugin installer's preinstall script; see "The plugin").
   - `wasm32 build and wasm-vs-native renders` (task-169) on `ubuntu-latest`: `cargo build
-    --locked --target wasm32-unknown-unknown -p orb-engine -p rbs -p rbm`, then
+    --locked --target wasm32-unknown-unknown -p orb-engine -p rbs -p rbm`, the web player's
+    crates (task-171: `-p orb-player -p orb-worklet`, then `-p orb-web-demo`), then
     `scripts/wasm-check.sh` on the sets that need no external input (see "The wasm build").
 - `release.yml`, on a tag `v*` and by hand:
   - `prepare` computes one `SOURCE_DATE_EPOCH` and one `ORB_BUILD_BRANCH` (`scripts/release-env.sh`)

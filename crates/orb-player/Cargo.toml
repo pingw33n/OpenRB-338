@@ -7,8 +7,6 @@ publish.workspace = true
 
 [dependencies]
 orb-engine = { path = "../orb-engine" }
-# Audio output (task-040).
-cpal = "0.18.2"
 # The lock-free single-producer single-consumer queues between the UI thread and the callback.
 rtrb = "0.4.1"
 # The lock-free snapshot the callback publishes and the UI thread reads.
@@ -16,12 +14,52 @@ triple_buffer = "9.0.0"
 # The resampler for a device that does not offer 44.1 kHz (sinc only: no FFT resampler).
 rubato = { version = "5.0.1", default-features = false }
 
+# Audio output (task-040), native only: the web has its own (task-171, docs/web.md).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cpal = "0.18.2"
+
+# The web output's browser glue (task-171, the feature `web`): the AudioContext, the
+# AudioWorkletNode and its port. Pinned to the versions of Cargo.lock; wasm-bindgen-cli must be
+# the same version as wasm-bindgen (docs/building.md, "The web player").
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "=0.2.129", optional = true }
+wasm-bindgen-futures = { version = "=0.4.79", optional = true }
+js-sys = { version = "=0.3.106", optional = true }
+web-sys = { version = "=0.3.106", optional = true, features = [
+  "AudioContext",
+  "AudioContextOptions",
+  "AudioContextState",
+  "AudioDestinationNode",
+  "AudioNode",
+  "AudioWorklet",
+  "AudioWorkletNode",
+  "AudioWorkletNodeOptions",
+  "BaseAudioContext",
+  "Blob",
+  "BlobPropertyBag",
+  "console",
+  "Document",
+  "Event",
+  "EventTarget",
+  "MessageEvent",
+  "MessagePort",
+  "Response",
+  "Url",
+  "VisibilityState",
+  "Window",
+] }
+
 # ASIO on x86_64 Windows (task-193): cpal's `asio` feature builds asio-sys, which needs LLVM
 # (bindgen) and the SDK subset in third_party/asiosdk (CPAL_ASIO_DIR, set by
 # .cargo/config.toml). Not on Windows arm64 (its x64 ASIO drivers load only into an x64
 # process: the x64 package runs there under emulation).
 [target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
 cpal = { version = "0.18.2", features = ["asio"] }
+
+[features]
+# The browser glue, `orb_player::web` (wasm32 only; nothing on other targets). The worklet's
+# own instance (crates/orb-worklet) is built without it: it imports nothing.
+web = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:web-sys"]
 
 [dev-dependencies]
 rbs = { path = "../rbs" }

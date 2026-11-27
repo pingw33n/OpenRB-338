@@ -1434,6 +1434,10 @@ pub struct Engine {
     /// Not in the original (task-306): the track lists before the last Initialize command,
     /// for orb's Undo ([`Engine::keep_undo`], [`Engine::undo_init`]).
     undo: Option<Box<crate::seq::Pool>>,
+    /// Not in the original (task-171): an id the engine's builder may give it, 0 by default.
+    /// The engine never reads it; the web player names the engines it built with it
+    /// (orb-player's `remote::Player`), so it can tell them from any other engine.
+    pub build_id: u64,
 }
 
 fn zero_buf() -> Box<[f32; MAX_FRAMES]> {
@@ -1492,6 +1496,7 @@ impl Engine {
             refused: None,
             taps: Box::new([[[0.0; BLOCK]; TAP_WIDTH]; 2]),
             undo: None,
+            build_id: 0,
         }
     }
 
@@ -1516,26 +1521,27 @@ impl Engine {
     /// of the batches before it, as the DLL's song does (the exe never closes that song,
     /// `docs/original_bugs.md` OB-20); the exe opens no window for it, so the caller should not
     /// play it. The refusal is returned and kept ([`Engine::load_refused`]).
-    pub fn load(&mut self, song: &song::Song) -> Result<(), LoadRefused> {
+    pub fn load(&mut self, song: &impl song::LoadSource) -> Result<(), LoadRefused> {
         self.refused = None;
-        self.set_globals(&song.globals);
-        for &d in song.form.device_blocks() {
+        self.set_globals(song.globals());
+        for &d in song.form().device_blocks() {
             self.device_data(d, &song.device_payload(d));
         }
-        if song.form == song::LoadForm::Rb1x {
+        if song.form() == song::LoadForm::Rb1x {
             // 909 msg 74 {0, 0} (0x1002BF12): the live enabled byte, then the record hook,
             // which does nothing with record off
             self.set_param(song::Device::Tr909, 0, 0);
         }
         // the batches, then what they leave of each track as one more batch
-        let rest = (0..song.tracks.len()).map(|t| (t, usize::MAX));
+        let tracks = song.tracks();
+        let rest = (0..tracks.len()).map(|t| (t, usize::MAX));
         let plan = song
-            .batches
+            .batches()
             .iter()
             .map(|b| (b.track as usize, b.len as usize));
         let mut sent = [0usize; 9];
         for (t, len) in plan.chain(rest) {
-            let left = &song.tracks[t][sent[t]..];
+            let left = &tracks[t][sent[t]..];
             let batch = &left[..len.min(left.len())];
             // sub_436B6F and sub_430163 send no batch without events
             if batch.is_empty() {
