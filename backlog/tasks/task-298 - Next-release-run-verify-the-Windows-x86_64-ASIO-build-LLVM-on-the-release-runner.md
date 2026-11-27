@@ -3,10 +3,11 @@ id: TASK-298
 title: >-
   Next release run: verify the Windows x86_64 ASIO build (LLVM on the release
   runner)
-status: To Do
+status: Done
 assignee:
   - '@pingw33n'
 created_date: '2026-11-24T19:53:00Z'
+updated_date: '2026-11-27T12:57:00Z'
 labels:
   - tools
   - tests
@@ -33,3 +34,9 @@ What to look at in the next release run: the package (x86_64-pc-windows-msvc) jo
 <!-- AC:BEGIN -->
 - [ ] #1 The release's x86_64 Windows package job builds with ASIO (LLVM installed by scripts/install-llvm-windows.sh, the job green), and the zip carries THIRD-PARTY-NOTICES.txt
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Closed by the user on 2026-11-27 without a separate check.
+<!-- SECTION:FINAL_SUMMARY:END -->

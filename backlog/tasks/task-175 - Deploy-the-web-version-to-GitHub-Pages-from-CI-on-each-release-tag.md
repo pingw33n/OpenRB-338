@@ -1,20 +1,17 @@
 ---
 id: TASK-175
-title: Deploy the web version to GitHub Pages under /web/ from CI on each release tag
+title: Deploy the web version to GitHub Pages under /web/ (no links yet)
 status: To Do
 assignee:
   - '@agent-worker'
 created_date: 2026-11-03 09:17
-updated_date: '2026-11-16T11:07:00Z'
+updated_date: '2026-11-27T12:58:00Z'
 labels:
   - tools
   - docs
 milestone: m-6
 dependencies:
-  - TASK-172
-  - TASK-173
   - TASK-174
-  - TASK-212
 references:
   - .github/workflows/release.yml
   - .github/workflows/ci.yml
@@ -39,10 +36,11 @@ What to build:
 - Actions pinned by SHA; permissions pages: write, id-token: write only on the deploy job.
 - A `collections` input on workflow_dispatch is not needed; a redeploy by hand picks up new collection commits.
 - The user's one-time Pages setting (Settings > Pages > Source: GitHub Actions) is documented by task-212.
-- README.md and the landing page link to the web version at https://pingw33n.github.io/OpenRB-338/web/; the About box's links stay as they are.
+- No links: README.md, the landing page and the About box stay as they are. The user tests the deployed /web/ first; the links are task-321 (the user, 2026-11-27).
+- The page is built with scripts/build-web.sh --index FILE (task-174), the index from `orb web-index` over folders named songs and mods.
 - docs/building.md describes the web part of the workflow, how to redeploy after a collection changes, and the size of the site.
 
-- The Pages address follows the repository name's case. task-212 checks the root's exact-case and lowercase forms after its first deploy; here check https://pingw33n.github.io/OpenRB-338/web/ and https://pingw33n.github.io/openrb-338/web/ (and a deep link such as web/index.json under each), record the HTTP status of each in the notes, and link only the form that works (the exact case) everywhere.
+- The Pages address follows the repository name's case. task-212 checks the root's exact-case and lowercase forms after its first deploy; here check https://pingw33n.github.io/OpenRB-338/web/ and https://pingw33n.github.io/openrb-338/web/ (and a deep link such as web/index.json under each), record the HTTP status of each in the notes, so task-321 links only the form that works.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -50,5 +48,5 @@ What to build:
 - [ ] #1 The Pages workflow (task-212's) also builds and deploys the web version under /web/ on a v* tag and by hand; a by-hand run (or a dry run with the deploy step skipped) is linked in the notes, and the landing page at the root is unaffected
 - [ ] #2 The deployed web/index.json pins the rb-songs and rb-mods commits the run cloned, and the About box shows the tag's version
 - [ ] #3 Actions are pinned by SHA and the Pages permissions are limited to the deploy job
-- [ ] #4 README.md and the landing page link to https://pingw33n.github.io/OpenRB-338/web/ (the repository name's case); the exact-case and lowercase /web/ addresses were checked after the first deploy, with the results in the notes; docs/building.md covers the web part of the workflow and the redeploy
+- [ ] #4 The exact-case and lowercase /web/ addresses were checked after the first deploy, with the results in the notes; docs/building.md covers the web part of the workflow and the redeploy; README.md and the landing page are unchanged
 <!-- AC:END -->

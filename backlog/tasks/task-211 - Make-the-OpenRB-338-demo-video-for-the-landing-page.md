@@ -1,11 +1,11 @@
 ---
 id: TASK-211
 title: Make the OpenRB-338 demo video for the landing page
-status: To Do
+status: Done
 assignee:
   - '@pingw33n'
 created_date: '2026-11-16T11:06:00Z'
-updated_date: '2026-11-16T11:07:00Z'
+updated_date: '2026-11-27T12:57:00Z'
 labels:
   - docs
 milestone: m-6
@@ -35,3 +35,9 @@ When the video exists, put its URL (and the hosting choice) in this task's final
 - [ ] #1 The video is recorded and hosted; its URL, hosting choice and poster image are in the final summary
 - [ ] #2 The landing page shows it (the URL set in the page's config by the supervisor or an agent)
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Closed by the user on 2026-11-27; no demo video is planned for now.
+<!-- SECTION:FINAL_SUMMARY:END -->
