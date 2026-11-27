@@ -1,11 +1,11 @@
 ---
 id: TASK-175
 title: Deploy the web version to GitHub Pages under /web/ (no links yet)
-status: To Do
+status: Done
 assignee:
   - '@agent-worker'
 created_date: 2026-11-03 09:17
-updated_date: '2026-11-27T14:28:00Z'
+updated_date: '2026-11-27T14:36:00Z'
 labels:
   - tools
   - docs
@@ -45,10 +45,10 @@ What to build:
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The Pages workflow (task-212's) also builds and deploys the web version under /web/ on a v* tag and by hand; a by-hand run (or a dry run with the deploy step skipped) is linked in the notes, and the landing page at the root is unaffected
-- [ ] #2 The deployed web/index.json pins the rb-songs and rb-mods commits the run cloned, and the About box shows the tag's version
+- [x] #1 The Pages workflow (task-212's) also builds and deploys the web version under /web/ on a v* tag and by hand; a by-hand run (or a dry run with the deploy step skipped) is linked in the notes, and the landing page at the root is unaffected
+- [x] #2 The deployed web/index.json pins the rb-songs and rb-mods commits the run cloned, and the About box shows the tag's version
 - [x] #3 Actions are pinned by SHA and the Pages permissions are limited to the deploy job
-- [ ] #4 The exact-case and lowercase /web/ addresses were checked after the first deploy, with the results in the notes; docs/building.md covers the web part of the workflow and the redeploy; README.md and the landing page are unchanged
+- [x] #4 The exact-case and lowercase /web/ addresses were checked after the first deploy, with the results in the notes; docs/building.md covers the web part of the workflow and the redeploy; README.md and the landing page are unchanged
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -102,4 +102,17 @@ Pages build failure, fixed on the branch above (criteria unchanged, task stays T
 - actionlint .github/workflows/pages.yml: clean (exit 0, actionlint 1.7.12).
 
 Correction to the note above (review round): the comment above the "Free disk space" step in pages.yml was not left alone. It is reworded to the 86 GB observed on /, on the first run, as one observation and not a guarantee of the runner's size. The roughly 8 GB figure stays as an estimate, not a measurement. The "14 GB" wording is gone from that comment.
+
+2026-11-27, supervisor: the first deployed run.
+- By-hand run on main 39c599d: https://github.com/pingw33n/OpenRB-338/actions/runs/46016309011 (success; build the site 14:28:58-14:34:46 UTC, about 6 min, deploy 18 s). The earlier run 46015387050 failed at Build orb without ALSA (fixed in 39c599d).
+- Clone step: SONGS_COMMIT=7764f252a1812487288990159dcce3a0f65e575b, MODS_COMMIT=bfbd8c94ea669fdd57c156bd7b544540054d9dfd. The deployed web/index.json has songs_repo.commit and mods_repo.commit equal to them, raw_base pinned to each.
+- Version: the deployed wasm carries "2026.1126.0917 (39c599d)", the latest release tag v2026.1126.0917 plus the main commit the run built (a by-hand run builds main, not the tag).
+- HTTP status (curl -L): https://pingw33n.github.io/OpenRB-338/web/ 200; https://pingw33n.github.io/openrb-338/web/ 404; .../OpenRB-338/web/index.json 200 (927,350 bytes); .../openrb-338/web/index.json 404; web/pkg/orb_web.js 200, web/pkg/orb_web_bg.wasm 200 (19,116,717 bytes). Only the exact-case form works: task-321 links https://pingw33n.github.io/OpenRB-338/web/.
+- Landing page at the root: 200, still shows 2026.1126.0917 downloads, no link to /web/.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+The Pages workflow (task-212's pages.yml) now also builds the web app and the collections index and deploys them under /web/ next to the landing page, on a release and by hand (tools: 0e89cfa, ALSA fix 39c599d). The first successful by-hand run, 46016309011 on main 39c599d, deployed https://pingw33n.github.io/OpenRB-338/web/ (200; the lowercase form 404s). web/index.json pins rb-songs 7764f25 and rb-mods bfbd8c9, the commits the run cloned; the About version is 2026.1126.0917 (39c599d). No links were added (task-321 does that after the user tests /web/). Build job about 6 min; site about 22 MiB.
+<!-- SECTION:FINAL_SUMMARY:END -->
