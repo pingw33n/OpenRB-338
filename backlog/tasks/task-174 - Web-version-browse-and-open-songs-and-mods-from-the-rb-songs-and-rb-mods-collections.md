@@ -6,7 +6,8 @@ title: >-
 status: To Do
 assignee:
   - '@agent-complex'
-created_date: '2026-11-03 09:17'
+created_date: 2026-11-03 09:17
+updated_date: '2026-11-27T10:12:00Z'
 labels:
   - ui
 milestone: m-6
@@ -17,8 +18,8 @@ references:
   - crates/orb-ui/src/browser.rs
   - crates/orb-ui/src/menu.rs
   - crates/orb-ui/src/session.rs
-  - 'https://github.com/pingw33n/rb-songs'
-  - 'https://github.com/pingw33n/rb-mods'
+  - https://github.com/pingw33n/rb-songs
+  - https://github.com/pingw33n/rb-mods
 priority: medium
 type: feature
 ordinal: 190000
@@ -46,3 +47,10 @@ What to build:
 - [ ] #4 Offline, a missing file and a cancelled download each show a message and leave the current song playing
 - [ ] #5 docs/ui_spec.md describes the collection places
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-27, the user (relayed by the supervisor): the web version keeps a single File > Open, like the desktop app. task-172 makes File > Open and Cmd/Ctrl+O open the in-app file browser, with a place "This computer…" that opens the browser's file picker. This task adds a "Song collection" place (and a "Mod collection" place to the mods dialog) to that same dialog; no separate "Open from Collection" command.
+Counts in the description are out of date: rb-songs now has 5,685 songs and rb-mods 326 mods, about 1 GB (tests/refs/thirdparty_*.json, 2026-11-26).
+<!-- SECTION:NOTES:END -->
