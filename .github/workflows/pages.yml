@@ -85,8 +85,9 @@ jobs:
       # `orb web-index` reads every file for its size, hash and mod name). The folders are
       # named songs and mods as in the repositories, and the commits that are checked out are
       # the ones index.json pins.
-      # The clones, both target folders and the wasm-bindgen-cli build need roughly 8 GB of
-      # the 14 GB ubuntu-latest has free; the log shows what is left.
+      # The clones, both target folders and the wasm-bindgen-cli build need roughly 8 GB. On the
+      # first run the runner showed 86 GB available on /: one observation, not a guarantee
+      # of the runner's size. The log shows what is left on each run.
       - name: Free disk space
         run: df -h
       - name: Clone the collections
@@ -99,6 +100,9 @@ jobs:
             echo "SONGS_COMMIT=$(git -C rb-songs rev-parse HEAD)"
             echo "MODS_COMMIT=$(git -C rb-mods rev-parse HEAD)"
           } | tee -a "$GITHUB_ENV"
+      # cpal (orb-player, under orb-cli) links ALSA: the same headers as ci.yml and release.yml.
+      - name: Install ALSA
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
       - name: Build orb
         run: cargo build --locked --release -p orb-cli
       - name: Index the collections

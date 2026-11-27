@@ -5,7 +5,7 @@ status: To Do
 assignee:
   - '@agent-worker'
 created_date: 2026-11-03 09:17
-updated_date: '2026-11-27T14:16:00Z'
+updated_date: '2026-11-27T14:28:00Z'
 labels:
   - tools
   - docs
@@ -81,4 +81,25 @@ Left for the supervisor after the merge (the task stays To Do): AC 1 (by-hand ru
 Review round 1 (send back), fixed in the amended commit: (1) the build job has defaults.run.shell: bash (pipefail, as release.yml, task-141), so a failing release-env.sh stops the step; (2) subject shortened to 72 columns; (3) one unit, KiB/MiB: guard 409600 KiB = 400 MiB, docs say 400 MiB (409,600 KiB), site 22.0 MiB (22,532 KiB); (4) timeout-minutes: 45 on the build job and a df -h step before the clones. Disk estimate against about 14 GB free on ubuntu-latest: rb-mods clone 1.9 GB + rb-songs 0.2 GB + native release target folder (orb-cli) and the two wasm target builds (roughly 2 GB each, my estimate, not measured on a runner) + the wasm-bindgen-cli build (about 1 GB) = roughly 8 GB; the df -h step shows the real figure on the first run. actionlint and shellcheck clean again.
 
 Review round 2: the per-file sizes in docs/building.md are in KiB/MiB now (orb_web_bg.wasm 18.2 MiB, index.json 905 KiB, orb_web.js 169 KiB, orb_worklet.wasm 313 KiB, web/ 20 MiB, rb-mods clone 1.9 GiB).
+
+Branch: worktree-agent-af8f679597c8c1b89 (follow-up fix, rebased on 1658cce).
+
+Failed by-hand Pages run: https://github.com/pingw33n/OpenRB-338/actions/runs/46015387050 (job "build the site", step "Build orb"): cargo build --locked --release -p orb-cli panicked in alsa-sys's build script, "Package alsa was not found in the pkg-config search path". orb-cli pulls in orb-player and cpal, which need the ALSA headers. Cause: pages.yml has no libasound2-dev install (ci.yml:67 and release.yml:111 have it). Disk was not the cause: the log shows 86G available on /.
+
+Plan (before changing code):
+1. pages.yml build job: add the step "Install ALSA" (sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev) before "Build orb".
+2. Other host packages: ci.yml:67 (the test job, which builds the whole workspace on ubuntu-latest) installs only libasound2-dev. The packages at ci.yml:92 (plugin job: xvfb, libfreetype6, libx11 and others) are for running the plugin under pluginval, and release.yml:277 (AppImage) for packaging, so neither is needed by the native orb-cli build. Only libasound2-dev is added.
+3. docs/building.md has no disk estimate and no "14 GB" (the 14 GB figure is only the comment in pages.yml, which the instruction says to leave), so no change there.
+4. Record the failed run, the cause, the fix and the 86 GB here. No acceptance criterion is checked; the task stays To Do.
+5. actionlint on pages.yml, then one commit.
+
+Pages build failure, fixed on the branch above (criteria unchanged, task stays To Do):
+- Failed run: https://github.com/pingw33n/OpenRB-338/actions/runs/46015387050, job "build the site", step "Build orb": cargo build --locked --release -p orb-cli panicked in alsa-sys's build script, "Package alsa was not found in the pkg-config search path".
+- Cause: .github/workflows/pages.yml never installed libasound2-dev; ci.yml:67 and release.yml:111 do.
+- Disk: the same log's "Free disk space" step (df -h) reports 86G available on /, so disk is not the cause. The first run's runner had 86 GB free.
+- Fix: a step "Install ALSA" before "Build orb" in the build job of pages.yml, running the same command as ci.yml:67 (sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev). Only that package: ci.yml:67 (the whole-workspace build on ubuntu-latest) needs no other host package.
+- docs/building.md: no disk estimate or "14 GB" statement in its Pages section, so unchanged. The only "14 GB" text is the comment above "Free disk space" in pages.yml, which the instruction leaves alone; it is now stale (the runner had 86 GB free) and can be corrected later.
+- actionlint .github/workflows/pages.yml: clean (exit 0, actionlint 1.7.12).
+
+Correction to the note above (review round): the comment above the "Free disk space" step in pages.yml was not left alone. It is reworded to the 86 GB observed on /, on the first run, as one observation and not a guarantee of the runner's size. The roughly 8 GB figure stays as an estimate, not a measurement. The "14 GB" wording is gone from that comment.
 <!-- SECTION:NOTES:END -->
