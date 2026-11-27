@@ -101,13 +101,15 @@ jobs:
       # entry unused for 7 days; the next run then clones once again (docs/building.md).
       - name: Current commits of the collections
         run: |
-          {
-            echo "SONGS_COMMIT=$(git ls-remote https://github.com/pingw33n/rb-songs.git refs/heads/main | cut -f1)"
-            echo "MODS_COMMIT=$(git ls-remote https://github.com/pingw33n/rb-mods.git refs/heads/main | cut -f1)"
-          } | tee -a "$GITHUB_ENV"
+          SONGS_COMMIT=$(git ls-remote https://github.com/pingw33n/rb-songs.git refs/heads/main | cut -f1)
+          MODS_COMMIT=$(git ls-remote https://github.com/pingw33n/rb-mods.git refs/heads/main | cut -f1)
           for v in SONGS_COMMIT MODS_COMMIT; do
             printf '%s' "${!v}" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::$v is empty or not a commit"; exit 1; }
           done
+          {
+            echo "SONGS_COMMIT=$SONGS_COMMIT"
+            echo "MODS_COMMIT=$MODS_COMMIT"
+          } | tee -a "$GITHUB_ENV"
       - name: Part of rb-songs from the cache
         id: songs-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

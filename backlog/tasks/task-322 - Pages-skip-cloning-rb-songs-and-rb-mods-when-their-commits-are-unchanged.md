@@ -5,7 +5,7 @@ status: To Do
 assignee:
   - '@agent-worker'
 created_date: '2026-11-27T14:25:00Z'
-updated_date: '2026-11-27T18:15:00Z'
+updated_date: '2026-11-27T18:25:00Z'
 labels:
   - tools
   - cli
@@ -48,11 +48,12 @@ What to build:
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. webindex.rs: split build into a songs part (rows without mod_variants, own song_dirs) and a mods part (rows, mods_dir), plus combine(parts, commits) that computes mod_variants; build = both parts + combine, so a full run and a cached run share the combine code (byte-identical by construction).
-2. orb web-index: --songs / --mods optional; --write-songs-part / --write-mods-part write a part; --songs-part / --mods-part read a part instead of a folder.
-3. pages.yml: git ls-remote for each repo, actions/cache (SHA pinned) per part keyed on a hash of the web-index code and what it reads plus the commit; clone and make the part only on a miss; combine; log hit or miss per collection.
-4. Test on the fixture (combine equals full; a one-sided change reuses the other part); check on the real collections (~/rb-songs, ~/rb-mods, read only).
-5. docs/web.md 8.4, docs/building.md (the cache, the keys, 7-day eviction).
+1. .github/workflows/pages.yml, step "Current commits of the collections": assign SONGS_COMMIT and MODS_COMMIT as shell variables from git ls-remote ... refs/heads/main | cut -f1.
+2. Keep the existing 40-hex check loop over SONGS_COMMIT and MODS_COMMIT, before any GITHUB_ENV write.
+3. Only then { echo SONGS_COMMIT=$SONGS_COMMIT; echo MODS_COMMIT=$MODS_COMMIT; } | tee -a "$GITHUB_ENV", which also echoes both values to the log.
+4. Nothing else in the step or the workflow changes. Step 5 audit: task-322 added the other steps; the cache steps and the later steps read ${{ env.* }} or steps outputs only from earlier steps, which is valid. release.yml is not touched by task-322.
+5. Verify: actionlint on pages.yml; shellcheck on the run block extracted to a script (no script in scripts/ is touched); simulate the fixed step in bash with GITHUB_ENV in a temp file and the real ls-remote; record the output.
+6. Notes: the two failed runs, the cause and the fix. AC 1 stays unchecked; the task stays To Do.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -84,6 +85,25 @@ NFD/NFC observation: a fresh clone made by scripts/clone-collection.sh at a5985e
 Review round 1 (send back): (1) cache keys were too narrow: added render.rs, fs.rs, lib.rs and orb-engine/src, listed in docs/building.md; (2) main.rs required_unless_present_any attributes were 105 columns: wrapped; (3) the task file text was incomplete. Review round 2 (coordinator): the plan, notes and final summary were bare "-" because the CLI took no stdin; rewritten here from files with --plan, --notes and --final-summary.
 
 AC 1 (supervisor, after the merge): run Actions > pages > Run workflow on main (tag empty) twice with no push to rb-songs or rb-mods between. Run 1: both miss, both cloned, cache filled. Run 2: the log of "Index the collections" says "part from the cache, not cloned" for both, and both "Part of ... from a clone" steps are skipped. Then push a commit to only one collection (or touch webindex.rs... which misses both) and run again: only the changed collection says "cloned, part made". Put the run links here, check AC 1, set Done.
+
+Follow-up fix round (supervisor's by-hand Pages runs). Branch: worktree-agent-a1bb6bde656bdae42 (rebased on main be023c8).
+Failed runs: https://github.com/pingw33n/OpenRB-338/actions/runs/46048807255 and https://github.com/pingw33n/OpenRB-338/actions/runs/46048996830, both in the step "Current commits of the collections" of .github/workflows/pages.yml.
+Cause: the step wrote SONGS_COMMIT=... and MODS_COMMIT=... only into "$GITHUB_ENV" (through tee -a), which reaches the later steps and not this shell. The check loop then read "${!v}" in the same shell, which was empty, so it printed "##[error]SONGS_COMMIT is empty or not a commit". The logged values were SONGS_COMMIT=a5985e2bf888ceb9ba5b1e7b6db2a044083cc083 and MODS_COMMIT=bfbd8c94ea669fdd57c156bd7b544540054d9dfd, so ls-remote itself worked.
+
+Fix (tools): the step "Current commits of the collections" now assigns SONGS_COMMIT and MODS_COMMIT as shell variables from git ls-remote ... refs/heads/main | cut -f1, runs the same 40-hex check over them, and only then writes SONGS_COMMIT=... and MODS_COMMIT=... to "$GITHUB_ENV" through tee -a, which also echoes both for the log. Nothing else in the step or the workflow changed.
+
+Step 5 audit (the steps task-322 added, from git diff be023c8~1 be023c8 -- .github/workflows/pages.yml): the cache steps read ${{ env.SONGS_COMMIT }} and ${{ env.MODS_COMMIT }} (set by an earlier step, valid), "Part of ... from a clone" and "Index the collections" read $SONGS_COMMIT / $MODS_COMMIT (later steps, valid), "Index the collections" reads the cache-hit outputs of earlier steps (valid). No other step reads a GITHUB_ENV or GITHUB_OUTPUT value in the step that wrote it. Earlier steps: "Choose the release" writes GITHUB_OUTPUT from a local shell variable and does not read the output back; "Build environment of the web app" only tees into GITHUB_ENV. Only the "Current commits of the collections" step had the bug. release.yml line 79 (tee into GITHUB_OUTPUT) is not part of task-322 and is not read in its step; not changed.
+
+Verification (on the worktree, commands run from scratchpad verify.sh):
+- actionlint .github/workflows/pages.yml: exit 0, no output.
+- The step's run block extracted to a script: shellcheck -s bash: exit 0, no output.
+- Simulation with bash -eo pipefail (the GitHub default for run: bash), GITHUB_ENV = a temp file, real git ls-remote:
+  SONGS_COMMIT=a5985e2bf888ceb9ba5b1e7b6db2a044083cc083
+  MODS_COMMIT=bfbd8c94ea669fdd57c156bd7b544540054d9dfd
+  exit 0; the GITHUB_ENV file holds the same two lines.
+- Error path (refs/heads/main replaced by a branch that does not exist, so ls-remote prints nothing): "::error::SONGS_COMMIT is empty or not a commit", exit 1, and the GITHUB_ENV file stays empty.
+
+AC 1 is not checked: it needs two real Pages runs on main after this fix is merged (see the AC 1 note above). The task stays To Do.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
