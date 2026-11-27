@@ -58,4 +58,6 @@ Why: three requests from the user (2026-11-27) for the web page (/OpenRB-338/web
 - A link to a mod's demo song (the song embedded in a mod, what Options > Play Mod... plays natively): e.g. ?mod-demo=<path in rb-mods>. Opening a mod's demo from the collection sets it likewise.
 - Loading the page with either parameter opens that song after the index loads (with its mod resolved and downloaded as usual). A path the index does not list, or a mod without a demo song, shows a message in the dialog and leaves the page usable.
 - Use the index's paths (stable across collection commits), not raw URLs; the links work under /OpenRB-338/web/ and any sub-path.
+
+Correction (supervisor): the mod's demo song is the Demo.rbs embedded in the mod, opened by Mods > Demo Song (App::demo_song, menu.rs:707), not Options > Play Mod. ?mod-demo= opens that, and Mods > Demo Song on a collection mod sets the link.
 <!-- SECTION:NOTES:END -->
