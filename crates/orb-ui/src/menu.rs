@@ -900,8 +900,8 @@ impl App {
             let again = self
                 .web_target
                 .as_ref()
-                .filter(|(n, p, _)| *n == self.doc_serial && self.doc.path.as_ref() == Some(p))
-                .map(|(_, p, _)| p.clone());
+                .and_then(|s| s.again(self.doc_serial, self.doc.path.as_deref()))
+                .map(Path::to_path_buf);
             match again {
                 Some(p) => self.save_to(&p),
                 None => self.web_save_as(),
@@ -925,8 +925,8 @@ impl App {
         let target = self
             .web_target
             .as_ref()
-            .filter(|(n, p, _)| *n == self.doc_serial && p == path)
-            .map(|(_, _, t)| t.clone())
+            .and_then(|s| s.target_for(self.doc_serial, path))
+            .cloned()
             .ok_or_else(|| format!("{}: no place to save to", path.display()));
         let result = self.song_for_save().and_then(|song| {
             let bytes = song
@@ -1134,7 +1134,11 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn web_save_to(&mut self, target: crate::web::SaveTarget) {
         let path = Path::new(crate::web::SONGS_DIR).join(target.file_name());
-        self.web_target = Some((self.doc_serial, path.clone(), target));
+        self.web_target = Some(crate::document::SaveSlot {
+            serial: self.doc_serial,
+            path: path.clone(),
+            target,
+        });
         self.save_to(&path);
     }
 

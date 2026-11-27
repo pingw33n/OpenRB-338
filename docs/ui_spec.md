@@ -2854,12 +2854,15 @@ the keyboard are the standalone app's. What differs:
     clear the cache itself.
 - **Save and Export** have no in-app save dialog on the web (the user's decision of
   2026-11-27). Save As, and Save of a song that was not saved in this page yet, ask the
-  browser: where it has its own save picker (`showSaveFilePicker`: Chrome, Edge, Opera, Brave
-  and the other Chromium browsers; the user's Brave on macOS opened it), the picker opens with
-  the song's name, and later Saves of that song write to the chosen file without asking (a
-  song opened or made since goes through the picker again); elsewhere (Firefox,
-  Safari) the song is downloaded named after the song (`Untitled.rbs` for a new one), and
-  each Save downloads it again. Closing the picker without a choice saves nothing. File >
+  browser: where it has its own save picker (`showSaveFilePicker`: Chrome, Edge, Opera and
+  the other Chromium browsers), the picker opens with the song's name, and later Saves of
+  that song write to the chosen file without asking (a song opened or made since goes
+  through the picker again); elsewhere (Firefox, Safari) the song is downloaded named after
+  the song (`Untitled.rbs` for a new one), and each Save downloads it again. In Brave, the
+  user's observation (2026-11-27) is that Save keeps asking while Chrome writes in place;
+  the likely cause (not confirmed) is that the picker appears but the page cannot write to
+  the chosen file. When the picker fails, the status line shows "(downloaded: the browser's
+  save picker failed)" (task-327). Closing the picker without a choice saves nothing. File >
   Export Loop as Audio File... works the same way for `SONG.flac`: the web exports **FLAC
   only** (no format choice; this narrows task-170's WAV and FLAC). The export runs on the
   page's thread in slices, the status line shows "Exporting NAME ... N%" then "Encoding NAME

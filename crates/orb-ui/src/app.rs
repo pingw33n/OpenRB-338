@@ -277,7 +277,7 @@ pub struct App {
     #[cfg(target_arch = "wasm32")]
     pub(crate) web_nav: crate::web::WebNav,
     #[cfg(target_arch = "wasm32")]
-    pub(crate) web_target: Option<(u64, std::path::PathBuf, crate::web::SaveTarget)>,
+    pub(crate) web_target: Option<crate::document::SaveSlot<crate::web::SaveTarget>>,
 }
 
 impl App {

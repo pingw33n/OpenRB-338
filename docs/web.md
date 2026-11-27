@@ -71,7 +71,7 @@ one runs an engine call.
 - **Rate.** `WebOutput` makes the `AudioContext` with `sampleRate: 44100`. If a browser refuses
   that rate it makes one at the device rate, and the host resamples with the native output's
   resampler (rubato's sinc resampler, `crates/orb-player/src/resample.rs`, moved there from
-  `output.rs` unchanged). Chrome 157 takes 44100.
+  `output.rs` unchanged). Brave (which reports itself as Chrome 157) takes 44100.
 - **Back to the UI.** After every engine call a snapshot (about 1 KB), and the tracks when their
   generation or revision changed. Once a second the processor script posts its own statistics
   (`{stats: {quanta, maxGapMs, dead}}`, not a wire message; `WebOutput::worklet_stats`).
@@ -109,7 +109,7 @@ in Firefox). `keydown` was listened to before, so a key press is expected to hav
 already; which of the events each browser accepted could not be checked by an agent (Firefox and
 Safari are the user's).
 
-## 5. Measured (Chrome 157, macOS, 2026-11-27)
+## 5. Measured (Brave via the extension, which reports itself as Chrome 157; macOS, 2026-11-27)
 
 With the test page (`scripts/web-demo.sh --serve`, `http://localhost:8338/`):
 
@@ -170,7 +170,15 @@ from the desktop app is in `docs/ui_spec.md` section 26.
   with the document's number (`App::web_target`, `App::doc_serial`: a new number whenever a
   song replaces the document, by Open, New, a drop, the start or a plugin's song load, and not
   on a save), so Save writes there again only for that document at that path; a song opened
-  later, even of the same name, goes through Save As;
+  later, even of the same name, goes through Save As (the state is `document::SaveSlot`, tested
+  natively; task-327). A download target has no file to write again, so each Save downloads
+  again (a browser set to ask where to save shows its own dialog each time), and the song's
+  name is the suggested one. In Brave, the user's observation (2026-11-27) is that Save keeps
+  asking where to save while Chrome writes in place; the likely cause (not confirmed) is that
+  the picker appears but the page cannot write to the chosen file, so the save falls back to
+  a download each time. When the picker fails the status line shows "(downloaded: the
+  browser's save picker failed)" (seen with a rejecting stub, not with Brave's own failure)
+  (task-327);
   `web::write_target` writes the bytes (`createWritable`, `write`, `close`) or downloads them
   (a Blob URL on a clicked link), and `Picked::Written` ends the save (the status line, then a
   pending New or Open goes on; a failure marks the song modified again and shows the error).
@@ -242,7 +250,7 @@ from the desktop app is in `docs/ui_spec.md` section 26.
   `UseKit` and `ChooseVariant`), each through `App::web_load_then` ("Reading NAME ..." in the
   status line), and then kept.
 
-### 7.1 Checked (Chrome 157, macOS, 2026-11-27)
+### 7.1 Checked (Brave via the extension, which reports itself as Chrome 157; macOS, 2026-11-27)
 
 Served from a local static server under `/OpenRB-338/web/`, with the shipped songs and the four
 recrypted shipped mods as fixtures from the same server, given through drops and the pickers'
@@ -263,7 +271,7 @@ inputs:
 - Settings (theme, Mods folder) were there after a reload. `?debug-panic`: the error box, the
   console has the message, the stack and the version line.
 
-### 7.2 The user's review (Brave, 2026-11-27) and its fixes, checked in Chrome 157
+### 7.2 The user's review (Brave, 2026-11-27) and its fixes, checked in Brave via the extension (it reports itself as Chrome 157)
 
 - **Play did nothing** (no sound, the steps stood): the context stayed suspended. `WebOutput`
   listened for the gestures on the document in the bubbling phase, and eframe stops the canvas's
@@ -285,7 +293,7 @@ inputs:
 - **Separators**: the Options menu's separator before Program Synth... is back on the web, and
   every menu's separators are the native menu's.
 
-### 7.3 The user's second review (Brave, 2026-11-27), checked in Chrome 157
+### 7.3 The user's second review (Brave, 2026-11-27), checked in Brave via the extension (it reports itself as Chrome 157)
 
 - **A half-drawn panel after View > Modern** in a page started in Classic: the modern parts
   were rasterized 30 ms a frame with no cover. Now the loading screen shows "Drawing the
@@ -318,12 +326,12 @@ inputs:
   overrun, `EMBF` name and trailing checks): now `rbm::Walk`, shared with `Rbm::parse`.
   `tests/walk.rs` checks it on 18 synthetic mods built in the test (11 of them damaged), not
   on real mod files. On the user's 326 mods (1 GB), from `~/rb-mods/mods`, read only, in
-  Chrome 157: 30356 reads of
+  Brave (reports itself as Chrome 157): 30356 reads of
   31 MB in all, 3.5 s (81 s one by one; 4.5 s 32 at a time; 3.5 s 128 at a time), the wasm
   memory unchanged (31 MB); the song `orion.rbs` then read and played its mod `Orbit2.rbm`.
   Before, with the shortcut, the scan took 0.2 s.
 
-### 7.5 wasm SIMD and wasm-opt (task-323, Chrome 157, macOS, 2026-11-27)
+### 7.5 wasm SIMD and wasm-opt (task-323, Brave via the extension, which reports itself as Chrome 157; macOS, 2026-11-27)
 
 The page's module is built with `-C target-feature=+simd128` and optimized by binaryen
 `wasm-opt -O3 -g --enable-simd` (version_133, `scripts/binaryen.sh`; flags in `docs/building.md`
@@ -662,7 +670,7 @@ The user's requests of 2026-11-27 for the page. Code: `crates/orb-ui/src/web.rs`
 - A mod of the computer, and the built-in kit chosen for a song that resolves to a mod, cannot
   be named by a link (`&mod=` is dropped).
 
-### 9.4.1 Checked (Chrome 157, macOS, 2026-11-27)
+### 9.4.1 Checked (Brave via the extension, which reports itself as Chrome 157; macOS, 2026-11-27)
 
 A local build with an index of rb-songs and rb-mods (5830 songs, 326 mods), served under
 `/OpenRB-338/web/` on a local port, in an own tab, no dialogs:
@@ -683,7 +691,7 @@ A local build with an index of rb-songs and rb-mods (5830 songs, 326 mods), serv
   landing page's).
 - Not checked by an agent: Firefox and Safari (the user's, see the task).
 
-### 9.4.2 Round 1: `?mod=` (Chrome 157, macOS, 2026-11-27)
+### 9.4.2 Round 1: `?mod=` (Brave via the extension, which reports itself as Chrome 157; macOS, 2026-11-27)
 
 `?mod-demo=` is replaced by `?mod=` (see Links above). Checked on a local build:
 - `?song=songs/BCBG.rbs&mod=mods/030microdot.rbm`: the song opened with `030microdot.rbm`

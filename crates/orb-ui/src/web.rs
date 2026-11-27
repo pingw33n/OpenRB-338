@@ -352,6 +352,9 @@ pub enum SaveFor {
 pub struct SaveTarget {
     name: String,
     handle: Option<JsValue>,
+    /// A download because the browser's save picker failed (not because it has none): the
+    /// status says so, as the song is then not tied to a file (task-327).
+    picker_failed: bool,
 }
 
 impl SaveTarget {
@@ -360,6 +363,7 @@ impl SaveTarget {
         SaveTarget {
             name: safe_name(name),
             handle: None,
+            picker_failed: false,
         }
     }
 
@@ -727,7 +731,7 @@ fn save_picker() -> Option<(web_sys::Window, js_sys::Function)> {
 /// [`Picked::SaveTo`] or [`Picked::SaveCancelled`]. As [`pick`], the picker opens only shortly
 /// after a click or a key press.
 pub fn pick_save(what: SaveFor, suggested: &str) {
-    let fallback = SaveTarget::download(suggested);
+    let mut fallback = SaveTarget::download(suggested);
     let Some((w, f)) = save_picker() else {
         picked(Picked::SaveTo(what, fallback));
         return;
@@ -751,6 +755,7 @@ pub fn pick_save(what: SaveFor, suggested: &str) {
         Ok(p) => js_sys::Promise::resolve(&p),
         Err(e) => {
             web_sys::console::warn_1(&e);
+            fallback.picker_failed = true;
             picked(Picked::SaveTo(what, fallback));
             return;
         }
@@ -767,6 +772,7 @@ pub fn pick_save(what: SaveFor, suggested: &str) {
                     SaveTarget {
                         name,
                         handle: Some(handle),
+                        picker_failed: false,
                     },
                 ));
             }
@@ -779,6 +785,8 @@ pub fn pick_save(what: SaveFor, suggested: &str) {
                 } else {
                     // no user gesture any more, a blocked picker: the download instead
                     web_sys::console::warn_1(&e);
+                    let mut fallback = fallback;
+                    fallback.picker_failed = true;
                     picked(Picked::SaveTo(what, fallback));
                 }
             }
@@ -799,7 +807,12 @@ pub fn write_target(what: SaveFor, target: &SaveTarget, bytes: Vec<u8>) {
     let name = target.name.clone();
     let Some(handle) = target.handle.clone() else {
         let r = download(&name, &bytes).map_err(|e| format!("the download failed: {e}"));
-        picked(Picked::Written(what, name, " (downloaded)", r));
+        let how = if target.picker_failed {
+            " (downloaded: the browser's save picker failed)"
+        } else {
+            " (downloaded)"
+        };
+        picked(Picked::Written(what, name, how, r));
         return;
     };
     wasm_bindgen_futures::spawn_local(async move {

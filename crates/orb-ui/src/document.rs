@@ -17,7 +17,7 @@
 //! reply with then (docs/song_load.md section 4.11), not from the panel, which shows the live
 //! values the tracks set. The original saves the tracks it reads back from the DLL.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use orb_cli::info::SongFacts;
 use orb_cli::mods::{Kit, STANDARD};
@@ -64,6 +64,35 @@ impl Document {
             .as_ref()
             .and_then(|p| p.file_name())
             .map_or_else(|| "Untitled".into(), |n| n.to_string_lossy().into_owned())
+    }
+}
+
+/// Where the web page saves the document it last saved with Save As (task-172, task-327): the
+/// document's number, its memory path and the browser's target (a file handle or a download).
+/// Generic in the target so the transitions are tested natively; the page uses `SaveTarget`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SaveSlot<T> {
+    pub serial: u64,
+    pub path: PathBuf,
+    pub target: T,
+}
+
+impl<T> SaveSlot<T> {
+    /// The slot is for the open document: the same number, and the document's file is still
+    /// the slot's path (a save that failed leaves the document without one).
+    pub fn is_for(&self, serial: u64, doc_path: Option<&Path>) -> bool {
+        self.serial == serial && doc_path == Some(self.path.as_path())
+    }
+
+    /// Save writes again to the slot's target: its path, if the slot is for the document.
+    pub fn again(&self, serial: u64, doc_path: Option<&Path>) -> Option<&Path> {
+        self.is_for(serial, doc_path).then_some(self.path.as_path())
+    }
+
+    /// The target for a save to `path` of the document `serial` (before the document has
+    /// taken `path`): the slot's target when it names that path.
+    pub fn target_for(&self, serial: u64, path: &Path) -> Option<&T> {
+        (self.serial == serial && self.path == path).then_some(&self.target)
     }
 }
 
@@ -281,6 +310,37 @@ pub fn compose(base: &rbs::Song, panel: &Panel, link: &Link, mod_name: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The web page's New -> Save (picker) -> Save: the second Save writes to the chosen file
+    /// without asking, and the title's name is the chosen file's (task-327).
+    #[test]
+    fn save_after_save_as_writes_to_the_chosen_file() {
+        let mut doc = Document::new();
+        let serial = 3;
+        assert_eq!(doc.name(), "Untitled");
+        // the picker answers: web_save_to sets the slot, save_to takes the path
+        let path = PathBuf::from("/Songs/Mine.rbs");
+        let slot = SaveSlot {
+            serial,
+            path: path.clone(),
+            target: "handle",
+        };
+        // before the save went through, Save asks (the document has no path)
+        assert_eq!(slot.again(serial, doc.path.as_deref()), None);
+        assert_eq!(slot.target_for(serial, &path), Some(&"handle"));
+        doc.path = Some(path.clone());
+        doc.modified = false;
+        assert_eq!(doc.name(), "Mine.rbs");
+        // Save again: to the same target, no picker
+        assert_eq!(
+            slot.again(serial, doc.path.as_deref()),
+            Some(path.as_path())
+        );
+        // another document (New, Open) does not inherit the target
+        assert!(!slot.is_for(serial + 1, doc.path.as_deref()));
+        // a Save As to another name does not use this slot's target
+        assert_eq!(slot.target_for(serial, Path::new("/Songs/Other.rbs")), None);
+    }
 
     fn ev(tick: i32) -> TrackEvent {
         TrackEvent {
