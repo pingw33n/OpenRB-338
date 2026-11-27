@@ -1371,11 +1371,12 @@ the window, `App::menu`; the headless panel tests run without it) and the comman
 |---|---|---|
 | File | New (Ctrl+N, Cmd+N on macOS) | the state of a start without a song argument: the empty Untitled song on the standard mod, unmodified, stopped, the panel at its start values; the startup sound follows the preference (18.1); the settings are kept; playback stops (`Link::load_new`); with unsaved changes the prompt first (task-091; the original's File New opens a template song, section 12) |
 | File | Open... (Ctrl+O, Cmd+O on macOS) | the browser for a song; with unsaved changes the prompt first |
+| File | Open Collection... (Ctrl+Shift+O, Cmd+Shift+O on macOS) | the web page only (section 26): the in-app browser on the song collection; the key does nothing natively, and Ctrl/Cmd+O stays Open |
 | File | Save (Ctrl+S, Cmd+S on macOS) | writes the song's file; a song with none goes to Save As |
 | File | Save As... | the browser for a `.rbs`; the file becomes the song's file |
 | File | Info... (Ctrl+I, Cmd+I on macOS) | opens the Song Information window below, or brings it to the front when it is open (`App::show_info`); disabled without a song, and the key does nothing then (task-310). The key is taken before the panel keys, so the plain I of the pattern-select keys is not triggered by it, and it works while a text field of the window has the focus, as Ctrl/Cmd+O does. A plugin's Info... item stays enabled and has no shortcut text (section 20) |
 | File | Export Loop as Audio File... | the browser for `.wav`, `.flac` or `.ogg`; enabled in song mode only (the original disables it in pattern mode, section 12) |
-| Edit | Undo (Ctrl+Z, Cmd+Z on macOS) | puts back the pattern the last Cut, Paste or Duplicate Pattern wrote, or the tracks of the last Initialize Loop or Song (orb's addition, task-306), and after a Duplicate selects its source again unless a pattern was selected since; one level, no redo; the item names the command ("Undo Paste Pattern") and is disabled when there is nothing to undo (below) |
+| Edit | Undo (Ctrl+Z, Cmd+Z on macOS) | puts back the pattern the last Cut, Paste or Duplicate Pattern wrote, or the tracks of the last Initialize Loop or Song (orb's addition, task-306), and after a Duplicate selects its source again unless a pattern was selected since; one level, no redo; the item names the command ("Undo Paste Pattern") and is disabled when there is nothing to undo (below) (a shortcut without Shift is not taken while Shift is held, natively too (task-324): Cmd+Shift+Z, which egui used to read as Undo, does nothing, as do Cmd+Shift+N, S, I, D, E, F, G and L) |
 | Edit | Cut Pattern (Ctrl+X, Cmd+X) | Copy Pattern, then the pattern's steps are emptied; the length and the shuffle flag stay, as with Clear Pattern |
 | Edit | Copy Pattern (Ctrl+C, Cmd+C) | the target pattern (below: the focused pattern editor's, else the focused row's selected pattern; steps, length, shuffle flag) to the system clipboard as JSON (section 16); the song is not modified |
 | Edit | Paste Pattern (Ctrl+V, Cmd+V) | the system clipboard's pattern JSON (section 16) into the target pattern, into a row of its device only (a 303 pattern into either 303; with a pattern editor focused the device is the editor's), nothing written and a status message for any other text; the knobs stay; a paste that changes nothing sends nothing and leaves the song unmodified |
@@ -2790,14 +2791,21 @@ the keyboard are the standalone app's. What differs:
   The page lists the songs of github.com/pingw33n/rb-songs and the mods of
   github.com/pingw33n/rb-mods from an index deployed next to it, and downloads a file only when
   it is used, from the collections' commit the index names.
-  - **File > Open Collection...** opens the in-app browser (section 17) on the song
+  - **File > Open Collection... (Ctrl+Shift+O, Cmd+Shift+O on macOS; task-324)** opens the
+    in-app browser (section 17) on the song
     collection: the "Song collection" place, the collection's folders and songs with their
     sizes, the keyboard navigation and type-to-jump as natively, starting in the folder of the
     last song opened there. Its one place is "Song collection" (sentence case, as "Recent
     folders"): the web has no Songs, Mods or Home place, no recent folders and no "Use as ...
     folder" buttons (the user's review of 2026-11-27; this is the only way to the in-app
     browser on the web). Opening a song downloads it, then its mod, then opens it (the
-    unsaved-changes prompt first, as natively).
+    unsaved-changes prompt first, as natively). The shortcut is `shortcuts::OPEN_COLLECTION`,
+    shown on the menu item and in Help > Keyboard Shortcuts on the web only. Natively the key
+    is taken and does nothing (there is no collection). Shift marks a variant of a command
+    (Save As), not a modifier to ignore: `shortcuts::consume` does not take a shortcut without
+    Shift while Shift is held, because egui's logical matching ignores an extra Shift (Cmd+Shift+O
+    ran Open, natively and on the web, before task-324). Option/Alt are left to text and to the
+    browser's menus.
   - **The Mods folder of a page load is the mod collection**: the Mods menu lists its mods by
     INFO name, sorted and grouped into variants as natively, and a song's mod is found there by
     the native rules, the remembered variant preference included; a mod the collection has not

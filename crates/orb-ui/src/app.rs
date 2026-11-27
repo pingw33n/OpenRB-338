@@ -1229,6 +1229,10 @@ impl App {
             // picker, task-172)
             if shortcuts::consume(ui, &shortcuts::NEW) {
                 self.command(Cmd::New);
+            } else if shortcuts::consume(ui, &shortcuts::OPEN_COLLECTION) {
+                // the web's File > Open Collection... (task-324); natively nothing, but the
+                // key is taken and is not Open
+                self.command(Cmd::OpenCollection);
             } else if shortcuts::consume(ui, &shortcuts::OPEN) {
                 self.command(Cmd::Open);
             } else if !self.is_plugin() && shortcuts::consume(ui, &shortcuts::SAVE) {

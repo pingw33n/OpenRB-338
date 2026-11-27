@@ -2100,7 +2100,9 @@ impl App {
                 *cmd = Some(Cmd::Open);
             }
             // the rb-songs collection (task-174)
-            if cfg!(target_arch = "wasm32") && item(ui, "Open Collection...", None) {
+            if cfg!(target_arch = "wasm32")
+                && item(ui, "Open Collection...", key(&shortcuts::OPEN_COLLECTION))
+            {
                 *cmd = Some(Cmd::OpenCollection);
             }
             if !plugin && item(ui, "Save", key(&shortcuts::SAVE)) {

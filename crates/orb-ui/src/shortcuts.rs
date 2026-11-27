@@ -7,6 +7,9 @@ use egui::{Context, Key, KeyboardShortcut, ModifierNames, Modifiers, Ui};
 
 pub const NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 pub const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
+/// File > Open Collection... of the web page (task-324); natively it is taken and does nothing.
+pub const OPEN_COLLECTION: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::O);
 pub const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 /// File > Info.
 pub const INFO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::I);
@@ -40,9 +43,19 @@ pub fn text(ctx: &Context, sc: &KeyboardShortcut) -> String {
     text_for(sc, ctx.os().is_mac())
 }
 
-/// Takes the shortcut's key press from the input, true if it was pressed.
+/// Takes the shortcut's key press from the input, true if it was pressed. Exact about Shift:
+/// egui's logical matching ignores an extra Shift, so Cmd+Shift+O would also be Cmd+O; here a
+/// shortcut without Shift is not taken while Shift is held (task-324).
 pub fn consume(ui: &Ui, sc: &KeyboardShortcut) -> bool {
-    ui.input_mut(|i| i.consume_shortcut(sc))
+    ui.input_mut(|i| consume_in(i, sc))
+}
+
+/// [`consume`] on the input itself.
+pub fn consume_in(i: &mut egui::InputState, sc: &KeyboardShortcut) -> bool {
+    if i.modifiers.shift && !sc.modifiers.shift {
+        return false;
+    }
+    i.consume_shortcut(sc)
 }
 
 #[cfg(test)]
@@ -73,5 +86,11 @@ mod tests {
             assert_eq!(text_for(sc, true), format!("Cmd+{k}"));
             assert_eq!(text_for(sc, false), format!("Ctrl+{k}"));
         }
+    }
+
+    #[test]
+    fn open_collection_is_shift_open() {
+        assert_eq!(text_for(&OPEN_COLLECTION, true), "Shift+Cmd+O");
+        assert_eq!(text_for(&OPEN_COLLECTION, false), "Ctrl+Shift+O");
     }
 }

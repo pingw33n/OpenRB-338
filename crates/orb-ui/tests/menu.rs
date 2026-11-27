@@ -4152,3 +4152,76 @@ fn ctrl_i_opens_the_info_window_and_plain_i_stays_a_panel_key() {
     tap(&mut h, Modifiers::NONE);
     assert_eq!(focus(&h), 1, "plain I selects its pattern");
 }
+
+/// task-324: a shortcut with Shift is its own key, not its unshifted twin: Cmd+Shift+O is
+/// File > Open Collection... (nothing natively), and does not open the browser as Cmd+O does;
+/// the other shortcuts do not run either with a Shift added.
+#[test]
+fn a_shifted_shortcut_does_not_run_its_unshifted_twin() {
+    let key = |key, modifiers| Event::Key {
+        key,
+        physical_key: Some(key),
+        pressed: true,
+        repeat: false,
+        modifiers,
+    };
+    let shifted = Modifiers::COMMAND | Modifiers::SHIFT;
+    let song = root().join("tests/songs/diag/songs/303_saw_lowcut.rbs");
+    let mut h = Harness::with_menu();
+    h.open(&song);
+    h.frame(vec![]);
+
+    // Cmd+O opens the browser, Cmd+Shift+O does not
+    h.frame(vec![
+        Event::ModifiersChanged(Modifiers::COMMAND),
+        key(egui::Key::O, Modifiers::COMMAND),
+    ]);
+    assert!(h.app.browsing(), "Cmd+O is Open");
+    h.frame(vec![key(egui::Key::Escape, Modifiers::NONE)]);
+    assert!(!h.app.browsing(), "Escape closes the browser");
+    h.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    h.frame(vec![
+        Event::ModifiersChanged(shifted),
+        key(egui::Key::O, shifted),
+    ]);
+    assert!(!h.app.browsing(), "Cmd+Shift+O is not Open");
+    h.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+
+    // no other shortcut runs with a Shift added (Save As, Redo, ...)
+    h.app.doc.modified = false;
+    for k in [
+        egui::Key::N,
+        egui::Key::S,
+        egui::Key::I,
+        egui::Key::Z,
+        egui::Key::D,
+        egui::Key::F,
+        egui::Key::G,
+        egui::Key::E,
+    ] {
+        // the mode the key would set is not the current one, so a wrong run shows
+        let mode = if k == egui::Key::G {
+            KeyMode::Synth
+        } else {
+            KeyMode::Patterns
+        };
+        h.app.key_mode = mode;
+        // a song with no file: Save would go to Save As and open the browser (nothing is
+        // written either way)
+        let path = h.app.doc.path.clone();
+        if k == egui::Key::S {
+            h.app.doc.path = None;
+        }
+        h.frame(vec![Event::ModifiersChanged(shifted), key(k, shifted)]);
+        h.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+        assert!(!h.app.browsing(), "Cmd+Shift+{k:?} opened a browser");
+        assert!(
+            h.app.doc.path.is_some() == (k != egui::Key::S),
+            "Cmd+Shift+{k:?} was New"
+        );
+        h.app.doc.path = path;
+        assert!(!h.app.info_is_open(), "Cmd+Shift+{k:?} was Info");
+        assert_eq!(h.app.key_mode, mode, "Cmd+Shift+{k:?} set a mode");
+    }
+    assert!(!h.app.doc.modified);
+}

@@ -708,7 +708,7 @@ impl Browser {
             if !typing && key(Key::End, Modifiers::NONE) && !self.entries.is_empty() {
                 self.select(self.entries.len() - 1);
             }
-            if ctx.input_mut(|i| i.consume_shortcut(&shortcuts::EDIT_PATH)) {
+            if ctx.input_mut(|i| shortcuts::consume_in(i, &shortcuts::EDIT_PATH)) {
                 ctx.memory_mut(|m| m.request_focus(path_id));
             }
             if key(Key::Enter, Modifiers::NONE) {

@@ -460,7 +460,8 @@ natively) and the section "the collections" of `crates/orb-ui/src/web.rs`.
   then opens the folder picker (`web::pick(Pick::ModsFolder)`, so a cancel changes nothing),
   and when unchecked it sets `mods_dir` back (`App::web_use_collection`) and reads the Mods
   menu again. The picked folder's files stay in memory (the song may play one of them).
-- **The in-app browser on the web** is reached only by File > Open Collection...; its sidebar
+- **The in-app browser on the web** is reached only by File > Open Collection... (Ctrl/Cmd+Shift+O,
+  task-324; browser check in 9.3); its sidebar
   has the one place "Song collection" (`Browser::sidebar_body` on wasm32), no other places, no
   recent folders and no "Use as ... folder" buttons (the user's review of 2026-11-27).
 - **Opening a song** (`App::web_open_song`: a song of the song collection, picked or dropped)
@@ -531,3 +532,20 @@ first:
   round-1 build): Use Collection moved before Choose File..., so the web's order is Use
   Collection, Choose File..., Choose Mods Folder...; "Choose file..." is "Choose File..." (Title
   Case) natively too.
+
+### 9.3 Ctrl/Cmd+Shift+O (task-324)
+
+File > Open Collection... has the shortcut Cmd+Shift+O (Ctrl+Shift+O elsewhere). egui's
+logical shortcut matching ignores an extra Shift, so Cmd+O (`shortcuts::OPEN`) used to match
+Cmd+Shift+O as well (the user saw the file picker in Firefox); `shortcuts::consume` now refuses
+a shortcut without Shift while Shift is held, and the app checks `OPEN_COLLECTION` first.
+
+Checked in Chrome 2026-11-27 (macOS, a local build of the page without an index, so Open
+Collection... shows its "index.json: HTTP 404" error box, which proves the command ran):
+Cmd+Shift+O raised that box and clicked no file input; Cmd+O clicked the song input (`.rbs`)
+and no box. The keys were sent by the extension's key action, so the check covers what the page
+receives, not the browser's own menu bindings (Chrome has Cmd+Shift+O as Bookmark Manager; the
+page's `preventDefault` is what must stop it, which a synthetic key cannot show). Firefox and
+Safari: not checked by an agent. The user then checked the page served from the branch and a
+macOS .app built from it and approved (2026-11-27: "324 is good"); the per-browser detail was
+not reported, so no Firefox or Safari result is recorded here.

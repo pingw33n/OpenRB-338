@@ -291,6 +291,12 @@ pub fn groups(is_mac: bool) -> Vec<Group> {
             rows: vec![
                 menu_row(is_mac, &shortcuts::NEW, "File > New"),
                 menu_row(is_mac, &shortcuts::OPEN, "File > Open..."),
+                #[cfg(target_arch = "wasm32")]
+                menu_row(
+                    is_mac,
+                    &shortcuts::OPEN_COLLECTION,
+                    "File > Open Collection...",
+                ),
                 menu_row(is_mac, &shortcuts::SAVE, "File > Save"),
                 menu_row(is_mac, &shortcuts::INFO, "File > Info..."),
                 menu_row(is_mac, &shortcuts::UNDO, "Edit > Undo"),
