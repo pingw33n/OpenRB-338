@@ -5,7 +5,7 @@ status: To Do
 assignee:
   - '@agent-worker'
 created_date: '2026-11-27T15:41:00Z'
-updated_date: '2026-11-27T15:57:00Z'
+updated_date: '2026-11-27T16:05:00Z'
 labels:
   - ui
 milestone: m-6
@@ -40,6 +40,7 @@ Why: three requests from the user (2026-11-27) for the web page (/OpenRB-338/web
 - [ ] #2 File > Open Collection (Random) and Cmd/Ctrl+Alt+O open a random openable collection song through the normal open path; Cmd+O and Cmd+Shift+O are unaffected (tests for the selection and the shortcut distinction)
 - [ ] #3 The browser check of the shortcut (Chrome; Firefox and Safari by the user) and docs/ui_spec.md section 26 / docs/web.md are updated
 - [ ] #4 The web page's title is '<song> - OpenRB-338', or '<song>* - OpenRB-338' when modified; the native window title is unchanged
+- [ ] #5 Opening a collection song or a mod's demo song puts a shareable link in the address bar (?song= / ?mod-demo=); loading such a link opens it; Back/Forward move between opened collection songs; a local file or New clears the parameter; a bad link shows a message (checked in a browser, tests for the parsing)
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -51,4 +52,10 @@ Why: three requests from the user (2026-11-27) for the web page (/OpenRB-338/web
 - "Can open" means what the index already says at deploy time, with no download: the song row has no read error (orb web-index read and parsed it), and its mod resolves (the built-in kit, or a non-empty mod_variants), or, with a local mods folder in use, that folder's lookup finds the mod.
 
 2026-11-27, the user: rename the web File menu items "Open Collection..." to "Open from Collection..." and the random one to "Open from Collection (Random)" (everywhere: menu, Keyboard Shortcuts help, docs/ui_spec.md, docs/web.md, tests).
+
+2026-11-27, the user: links to collection songs.
+- Opening a song from the collection changes the address bar, so the link can be shared and opens the same song: e.g. /OpenRB-338/web/?song=<path in rb-songs, as in the index, URL-encoded>. Use the History API: opening another collection song pushes a new entry, so Back/Forward go between the songs opened (each through the normal open path, the unsaved-changes prompt first). Opening a local file, New, or a song not from the collection removes the parameter (replaceState), so the bar never names a song that is not open.
+- A link to a mod's demo song (the song embedded in a mod, what Options > Play Mod... plays natively): e.g. ?mod-demo=<path in rb-mods>. Opening a mod's demo from the collection sets it likewise.
+- Loading the page with either parameter opens that song after the index loads (with its mod resolved and downloaded as usual). A path the index does not list, or a mod without a demo song, shows a message in the dialog and leaves the page usable.
+- Use the index's paths (stable across collection commits), not raw URLs; the links work under /OpenRB-338/web/ and any sub-path.
 <!-- SECTION:NOTES:END -->
