@@ -6,7 +6,8 @@ title: >-
 status: To Do
 assignee:
   - '@agent-worker'
-created_date: '2026-11-03 09:16'
+created_date: 2026-11-03 09:16
+updated_date: '2026-11-27T11:46:00Z'
 labels:
   - cli
   - tools
@@ -15,8 +16,8 @@ dependencies: []
 references:
   - crates/orb-cli/src/info.rs
   - crates/orb-cli/src/mods.rs
-  - 'https://github.com/pingw33n/rb-songs'
-  - 'https://github.com/pingw33n/rb-mods'
+  - https://github.com/pingw33n/rb-songs
+  - https://github.com/pingw33n/rb-mods
   - docs/rbm.md
 priority: medium
 type: feature
@@ -43,3 +44,9 @@ The key names and the format version go into docs (docs/rbm.md or a new docs/web
 - [ ] #3 Every song's mod name resolves against the index's mods by the same rule as orb's mod lookup (task-150/151); the songs whose mod is missing are counted in the notes
 - [ ] #4 The format is documented, and the subcommand is hidden from the user help
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-27, supervisor: the counts in the description are out of date. rb-songs now has 5,685 songs (152 MB) and rb-mods 326 mods (about 1 GB); tests/refs/thirdparty_songs.json and thirdparty_mods.json list them (task-317). The web page (task-172, merged as 50a5b08) checks a mod with rbm::Walk / Rbm::parse; the index must give a mod a name exactly when Rbm::parse does (orb_cli::mods::scan's rule). The user's decision for task-174: the collection is the mods source on page load; a local mods folder replaces it for the session.
+<!-- SECTION:NOTES:END -->
