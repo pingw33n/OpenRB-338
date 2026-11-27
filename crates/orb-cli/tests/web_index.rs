@@ -50,7 +50,11 @@ fn unreadable(path: &Path, bytes: &[u8]) -> bool {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o0)).unwrap();
     }
-    std::fs::read(path).is_err()
+    if std::fs::read(path).is_ok() {
+        std::fs::remove_file(path).unwrap();
+        return false;
+    }
+    true
 }
 
 /// `songs/` and `mods/` under `dir`; whether the unreadable files could be made.
