@@ -39,7 +39,7 @@ class Build(unittest.TestCase):
             self.assertIn(f'<meta property="og:image" content="{site}img/og.jpg">', page)
             self.assertEqual(page.count("<h1"), 1)
             # the visitor counter (GoatCounter), as given by its dashboard
-            self.assertIn('<script data-goatcounter="https://pingw33n.goatcounter.com/count"\n'
+            self.assertIn('<script data-goatcounter="https://openrb338.goatcounter.com/count"\n'
                           '        async src="https://gc.zgo.at/count.js"></script>', page)
             self.assertLessEqual(len(build_site.DESCRIPTION), 160)
             ld = re.search(r'<script type="application/ld\+json">(.*?)</script>', page, re.S)

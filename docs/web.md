@@ -332,6 +332,16 @@ Measured in one Chrome tab at one window size on localhost, the page started in 
 The name section is kept by `-g`: 16,105 named functions unoptimized, 9,178 with wasm-opt.
 The two changes were not measured apart. The classic start (no drawing) was not timed.
 
+### 7.6 The visitor count (task-325)
+
+`index.html` carries the GoatCounter script (`data-goatcounter` =
+`https://openrb338-web.goatcounter.com/count`, `async src="https://gc.zgo.at/count.js"`): page
+views only, cookieless, in the web app's own dashboard https://openrb338-web.goatcounter.com
+(the landing page counts to https://openrb338.goatcounter.com, docs/building.md). It is the
+page's only third-party request besides raw.githubusercontent.com (the collections). It loads
+async in the `<head>`, so it does not hold up the loading screen; if it fails (offline,
+blocked, localhost) nothing else changes.
+
 ## 8. The collection index: `orb web-index` (task-173)
 
 The page cannot list a GitHub repository (60 unauthenticated API requests an hour) or read the

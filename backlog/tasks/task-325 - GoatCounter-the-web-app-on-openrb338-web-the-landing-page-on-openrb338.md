@@ -5,6 +5,7 @@ status: To Do
 assignee:
   - '@agent-worker'
 created_date: '2026-11-27T15:27:00Z'
+updated_date: '2026-11-27T16:15:00Z'
 labels:
   - ui
   - docs
@@ -36,6 +37,28 @@ What to do:
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 The web app's page sends a page view to openrb338-web.goatcounter.com and still loads and plays (checked in a browser, the request seen in the network panel)
-- [ ] #2 The landing page counts to openrb338.goatcounter.com; tools/build_site_test.py passes
-- [ ] #3 docs/building.md and docs/web.md name both dashboards
+- [x] #2 The landing page counts to openrb338.goatcounter.com; tools/build_site_test.py passes
+- [x] #3 docs/building.md and docs/web.md name both dashboards
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Add the snippet to crates/orb-web/index.html, switch site/index.html and its test to openrb338, document both dashboards in docs/building.md and docs/web.md; build with scripts/build-web.sh, serve on 8351, check in Chrome.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Branch: worktree-agent-a3539f389cb424d72
+
+Browser check (Chrome, own tab, http://localhost:8351/OpenRB-338/web/, built with scripts/build-web.sh --serve 8351): the page loaded, the loading screen went away and the panel drew (title OpenRB-338 - Untitled); clicking Play raised no error. Network panel: GET https://gc.zgo.at/count.js was issued but failed net::ERR_BLOCKED_BY_CLIENT (an extension/content blocker in this Chrome), so the count request itself never fired; the app was unaffected by the failed script. The request to openrb338-web is therefore not seen end to end; the snippet is the same form as the landing page's. python3 tools/build_site_test.py: OK. No Rust changed, cargo test not run. Server stopped, tab closed.
+
+Correction after review: AC 1 is not met. Seen: gc.zgo.at/count.js was requested and blocked by a content blocker (net::ERR_BLOCKED_BY_CLIENT); the app loaded and Play raised no error, the app unaffected. The count request to openrb338-web.goatcounter.com was NOT seen. The supervisor checks the count request on the deployed page after the next Pages run.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+The web app page carries the GoatCounter snippet for openrb338-web; the landing page and its test use openrb338; docs/building.md and docs/web.md (7.6) name both dashboards and the old pingw33n site. Browser: app loads, Play raises no error; count.js was requested but blocked by a content blocker (ERR_BLOCKED_BY_CLIENT), the app unaffected, the count request was not seen, so AC 1 stays open until the supervisor checks it on the deployed page after the next Pages run. build_site_test.py passes. No Rust changed.
+<!-- SECTION:FINAL_SUMMARY:END -->
