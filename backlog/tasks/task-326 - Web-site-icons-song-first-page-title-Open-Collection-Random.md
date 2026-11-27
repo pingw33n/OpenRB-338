@@ -5,7 +5,7 @@ status: To Do
 assignee:
   - '@agent-worker'
 created_date: '2026-11-27T15:41:00Z'
-updated_date: '2026-11-27T15:46:00Z'
+updated_date: '2026-11-27T15:57:00Z'
 labels:
   - ui
 milestone: m-6
@@ -49,4 +49,6 @@ Why: three requests from the user (2026-11-27) for the web page (/OpenRB-338/web
 - Title format: "<song>* - OpenRB-338" when modified (the mark right after the name, no space), "<song> - OpenRB-338" otherwise.
 - Shortcut: if Cmd+Option+O / Ctrl+Alt+O has any problem (Option typing a character on macOS, AltGr on Windows layouts, a browser binding), do not document a limitation: pick another shortcut that works in Chrome, Firefox and Safari on macOS and on Windows/Linux, avoiding browser-reserved keys (e.g. Cmd/Ctrl+Shift+R is a hard reload), and record the choice and why in the notes and docs.
 - "Can open" means what the index already says at deploy time, with no download: the song row has no read error (orb web-index read and parsed it), and its mod resolves (the built-in kit, or a non-empty mod_variants), or, with a local mods folder in use, that folder's lookup finds the mod.
+
+2026-11-27, the user: rename the web File menu items "Open Collection..." to "Open from Collection..." and the random one to "Open from Collection (Random)" (everywhere: menu, Keyboard Shortcuts help, docs/ui_spec.md, docs/web.md, tests).
 <!-- SECTION:NOTES:END -->
