@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://pingw33n.github.io/OpenRB-338/"><b>Website</b></a> ·
+  <a href="https://pingw33n.github.io/OpenRB-338/web/" target="_blank" rel="noopener"><b>Web App</b></a> ·
   <a href="https://github.com/pingw33n/OpenRB-338/releases"><b>Download</b></a> ·
   <a href="https://raw.githubusercontent.com/pingw33n/OpenRB-338/main/assets/readme/screenshot.png"><b>Screenshot</b></a> ·
   <a href="https://github.com/pingw33n/rb-songs"><b>Song collection</b></a> ·
@@ -102,6 +103,9 @@ in the plugin: Help > Plugin Usage), and docs/plugin.md describes how it works.
    - Linux: make the AppImage executable (`chmod +x OpenRB-338-*.AppImage`).
      It holds its own icon and menu entry: for a menu item, open it with an AppImage tool such
      as Gear Lever or AppImageLauncher.
+
+   Or skip the download and
+   [play it in the browser](https://pingw33n.github.io/OpenRB-338/web/).
 
 3. **Optionally, get songs and mods:** download the
    [song collection](https://github.com/pingw33n/rb-songs) and the
