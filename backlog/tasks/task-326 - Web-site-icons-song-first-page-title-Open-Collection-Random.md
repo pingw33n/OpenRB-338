@@ -5,7 +5,7 @@ status: To Do
 assignee:
   - '@agent-worker'
 created_date: '2026-11-27T15:41:00Z'
-updated_date: '2026-11-27T16:05:00Z'
+updated_date: '2026-11-27T16:20:00Z'
 labels:
   - ui
 milestone: m-6
@@ -60,4 +60,6 @@ Why: three requests from the user (2026-11-27) for the web page (/OpenRB-338/web
 - Use the index's paths (stable across collection commits), not raw URLs; the links work under /OpenRB-338/web/ and any sub-path.
 
 Correction (supervisor): the mod's demo song is the Demo.rbs embedded in the mod, opened by Mods > Demo Song (App::demo_song, menu.rs:707), not Options > Play Mod. ?mod-demo= opens that, and Mods > Demo Song on a collection mod sets the link.
+
+2026-11-27, the user: support ?skin=classic (and ?skin=modern) in the page URL: the page starts in that skin for that load (combinable with ?song= / ?mod-demo=); an unknown value is ignored with a console message; it does not overwrite the saved theme unless the user switches in View; switching skin does not edit the URL.
 <!-- SECTION:NOTES:END -->
