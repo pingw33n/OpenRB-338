@@ -3,7 +3,9 @@
 # release is PUBLISHED (a tag push only makes a draft whose assets are not public yet) and by
 # hand. The download links come from the release's tag at build time, and the build HEADs every
 # one of them, so it fails instead of deploying a dead link. One Pages artifact holds the whole
-# site: the web app (task-175) goes into the same folder under web/ (see the marked step).
+# site: the web app (task-175) is built in the same job with the tag's version and the
+# collection index of the two repositories' current commits, and goes into the folder under
+# web/ (docs/building.md "The web page"). A redeploy by hand picks up new collection commits.
 #
 # One-time setting (docs/building.md): Settings > Pages > Source: GitHub Actions. Until it is
 # set, the deploy job fails at deploy-pages with "Pages site not found / not enabled".
@@ -32,8 +34,15 @@ jobs:
   build:
     name: build the site
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # scripts/release-env.sh (the web build's ORB_BUILD_BRANCH) reads the history
+          fetch-depth: 0
       - name: Choose the release
         id: rel
         env:
@@ -55,15 +64,65 @@ jobs:
         run: |
           node site/detect_test.js
           python3 -m unittest tools/build_site_test.py
+      # The web app (task-175, docs/web.md sections 7 to 9). Its version is the tag's, as in
+      # release.yml (scripts/release-env.sh).
+      - name: Build environment of the web app
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: scripts/release-env.sh "$TAG" | tee -a "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: pages-web
+      # wasm-bindgen-cli at the version scripts/build-web.sh checks for. rust-cache keeps the
+      # installed binary between runs.
+      - name: Install wasm-bindgen-cli
+        run: |
+          want=$(sed -n 's/^want=//p' scripts/build-web.sh)
+          if [ "$(wasm-bindgen --version 2>/dev/null)" != "wasm-bindgen $want" ]; then
+            cargo install wasm-bindgen-cli --version "$want" --locked
+          fi
+      # The collections at their current main, shallow (a blobless clone does not help:
+      # `orb web-index` reads every file for its size, hash and mod name). The folders are
+      # named songs and mods as in the repositories, and the commits that are checked out are
+      # the ones index.json pins.
+      # The clones, both target folders and the wasm-bindgen-cli build need roughly 8 GB of
+      # the 14 GB ubuntu-latest has free; the log shows what is left.
+      - name: Free disk space
+        run: df -h
+      - name: Clone the collections
+        run: |
+          mkdir "$RUNNER_TEMP/collections"
+          cd "$RUNNER_TEMP/collections"
+          git clone --depth 1 --quiet https://github.com/pingw33n/rb-songs.git
+          git clone --depth 1 --quiet https://github.com/pingw33n/rb-mods.git
+          {
+            echo "SONGS_COMMIT=$(git -C rb-songs rev-parse HEAD)"
+            echo "MODS_COMMIT=$(git -C rb-mods rev-parse HEAD)"
+          } | tee -a "$GITHUB_ENV"
+      - name: Build orb
+        run: cargo build --locked --release -p orb-cli
+      - name: Index the collections
+        run: >
+          target/release/orb web-index
+          --songs "$RUNNER_TEMP/collections/rb-songs/songs"
+          --mods "$RUNNER_TEMP/collections/rb-mods/mods"
+          --songs-commit "$SONGS_COMMIT" --mods-commit "$MODS_COMMIT"
+          -o "$RUNNER_TEMP/index.json"
+      - name: Build the web app
+        run: scripts/build-web.sh --index "$RUNNER_TEMP/index.json"
       - name: Build the site
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.rel.outputs.tag }}
         run: >
           python3 tools/build_site.py --tag "$TAG" --out _site
-          --release-sizes --check-urls
-      # task-175: build the web app here and add `--web PATH_TO_ITS_BUILD` to the command
-      # above, which copies it to _site/web/.
+          --release-sizes --check-urls --web dist/web
+      # GitHub Pages publishes at most 1 GB; stop well before it (409600 KiB = 400 MiB).
+      - name: Check the size of the site
+        run: |
+          du -sh _site _site/web
+          kb=$(du -sk _site | cut -f1)
+          [ "$kb" -lt 409600 ] || { echo "::error::the site is $kb KiB"; exit 1; }
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site

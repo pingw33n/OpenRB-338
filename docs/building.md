@@ -1243,6 +1243,28 @@ No framework, no build tool beyond `tools/build_site.py`.
   `--release-sizes --check-urls` and uploads the Pages artifact; the `deploy` job alone has `pages: write` and
   `id-token: write`. Actions are pinned by SHA. The site is one artifact: the web app (task-175)
   is built in the `build` job and copied to `web/` with `--web`.
+- **The web part** (task-175; no page links to `/web/` yet, task-321). Before the site is built
+  the `build` job: takes `SOURCE_DATE_EPOCH` and `ORB_BUILD_BRANCH` from `scripts/release-env.sh
+  TAG` (so the About box shows the tag's version, `2026.1127.1200`, as the packages do; the
+  checkout has the full history for it); installs wasm-bindgen-cli at the version
+  `scripts/build-web.sh` names (`rust-cache` keeps the binary between runs); clones
+  `pingw33n/rb-songs` and `pingw33n/rb-mods` at `--depth 1` into `$RUNNER_TEMP/collections`
+  (a blobless clone is no gain: `orb web-index` reads every file); builds `orb`; runs `orb
+  web-index --songs .../rb-songs/songs --mods .../rb-mods/mods --songs-commit SHA --mods-commit
+  SHA` with the commits that were checked out, so `web/index.json` pins them; runs
+  `scripts/build-web.sh --index`; and passes `dist/web` to `tools/build_site.py --web`. A last
+  step fails the run when the site is 400 MiB (409,600 KiB) or more (the Pages limit is 1 GB). The web app is
+  built from the commit the run is on (the tag for a published release, `main` for a run by
+  hand) with the tag's version.
+- **Redeploying after a collection changes:** Actions > pages > Run workflow on `main` (leave
+  `tag` empty for the latest release); the run clones the collections again and writes a new
+  `index.json`. The index is the only thing that changes with the collections, and the deployed
+  page keeps downloading from the commits its index pins until then.
+- **Size of the site (2026-11-27, a local run of the same steps):** 22.0 MiB (22,532 KiB) in all:
+  `web/` 20 MiB (`orb_web_bg.wasm` 18.2 MiB, `index.json` 905 KiB for 5804 songs and 326 mods
+  at rb-songs 59a40e4 and rb-mods bfbd8c9, `orb_web.js` 169 KiB, `orb_worklet.wasm` 313 KiB), the
+  landing page about 2 MiB. Cloning `rb-mods` (1.9 GiB with its `.git`) took 108 s locally and
+  `rb-songs` 9 s; indexing 7.9 s, the two wasm builds 1 min 52 s with a warm cache.
 - **The user's one-time setting:** Settings > Pages > Build and deployment > Source: GitHub
   Actions. Until it is set, the `deploy` job fails at `deploy-pages` with an error that Pages is
   not enabled for the repository.
