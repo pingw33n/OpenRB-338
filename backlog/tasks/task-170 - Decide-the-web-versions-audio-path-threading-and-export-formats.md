@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pingw33n'
 created_date: 2026-11-03 09:16
-updated_date: '2026-11-27T07:39:00Z'
+updated_date: '2026-11-27T10:37:00Z'
 labels:
   - decision
   - ui
@@ -43,6 +43,12 @@ Also to settle:
 <!-- AC:BEGIN -->
 - [x] #1 The user has chosen the audio path (A, B, C or another) and the answers to the export, settings and sample-rate questions; the final summary records them with the date
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-27, the user (task-172 review): export on the web is FLAC only (no WAV), saved through the browser's own save UI with no in-app dialog; Save likewise skips the in-app dialog.
+<!-- SECTION:NOTES:END -->
 
 ## Final Summary
 
