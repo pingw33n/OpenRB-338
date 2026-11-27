@@ -542,8 +542,19 @@ app is in `docs/ui_spec.md` section 26, how it is put together in `docs/web.md` 
 
 - **Tools.** The pinned toolchain with its `wasm32-unknown-unknown` target
   (`rust-toolchain.toml`) and **wasm-bindgen-cli 0.2.129**, the one of "The web player" (`cargo
-  install wasm-bindgen-cli --version 0.2.129 --locked`; the script checks the version). No
-  trunk and no wasm-opt: the script runs two cargo builds and wasm-bindgen, nothing else.
+  install wasm-bindgen-cli --version 0.2.129 --locked`; the script checks the version) and
+  **wasm-opt of binaryen version_133** (task-323), which `scripts/binaryen.sh` downloads on first
+  use into `target/binaryen-version_133/` as a pinned release asset checked against its SHA-256
+  (macOS and Linux, x86_64 and aarch64; the same way `scripts/wasm-check.sh` gets wasmtime; a new
+  version is an edit of the version and the four checksums in that script). No trunk: the script
+  runs two cargo builds, wasm-bindgen and wasm-opt.
+- **Flags.** The page's module is built with `RUSTFLAGS="-C target-feature=+simd128"` (appended
+  to a `RUSTFLAGS` already set; tiny-skia under resvg has SIMD paths) and only that cargo build:
+  the worklet's module (the engine) and every native build are as before (the worklet's
+  `orb_worklet.wasm` is byte for byte the one without the flag, so `scripts/wasm-check.sh` needs
+  no new run). After wasm-bindgen, `wasm-opt -O3 -g --enable-simd` rewrites `orb_web_bg.wasm` in
+  place: `-g` keeps the name section (panic stacks name the functions that survive inlining).
+  The Pages workflow runs `scripts/binaryen.sh` in a step of its own, then `build-web.sh`.
 - **What it writes.** `dist/web/` (ignored by git, as all of `dist/`): `index.html` (from
   `crates/orb-web/index.html`), `favicon.ico` (`assets/app_icon.ico`), `orb_worklet.wasm` (the
   worklet's module) and `pkg/orb_web.js` + `pkg/orb_web_bg.wasm` (the page's module, through

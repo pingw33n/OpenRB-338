@@ -21,8 +21,9 @@
 # Needs the pinned toolchain's wasm32-unknown-unknown target (rust-toolchain.toml) and
 # wasm-bindgen-cli of the lockfile's wasm-bindgen version (0.2.129):
 #   cargo install wasm-bindgen-cli --version 0.2.129 --locked
-# The version and commit of the About box come from orb-ui's build script, as natively
-# (SOURCE_DATE_EPOCH and ORB_BUILD_BRANCH apply).
+# wasm-opt of binaryen (the pinned version_133, downloaded into target/ and checked by SHA-256 by
+# scripts/binaryen.sh; macOS and Linux). The version and commit of the About box come from
+# orb-ui's build script, as natively (SOURCE_DATE_EPOCH and ORB_BUILD_BRANCH apply).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -61,13 +62,20 @@ cd "$root"
 # two builds: one with the page's module would put orb-player's feature `web` (wasm-bindgen)
 # into the worklet's module too (features are unified within a build)
 cargo build --locked --release --target wasm32-unknown-unknown -p orb-worklet
-cargo build --locked --release --target wasm32-unknown-unknown -p orb-web
+# the page's module only is built with wasm SIMD (tiny-skia under resvg, which rasterizes the
+# modern skin's panel, has SIMD paths; task-323); the worklet's module (the engine) is not
+RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+simd128" \
+    cargo build --locked --release --target wasm32-unknown-unknown -p orb-web
 
 wasm="$target/wasm32-unknown-unknown/release"
 rm -rf "$out"
 mkdir -p "$out"
 cp "$wasm/orb_worklet.wasm" "$out/"
 wasm-bindgen --target web --no-typescript --out-dir "$out/pkg" "$wasm/orb_web.wasm"
+# binaryen's wasm-opt on the page's module (pinned, scripts/binaryen.sh). -g keeps the name
+# section, so a panic's stack shows function names (task-172); -O3, not -Oz: speed is the aim.
+wasm_opt="$(scripts/binaryen.sh)"
+"$wasm_opt" -O3 -g --enable-simd "$out/pkg/orb_web_bg.wasm" -o "$out/pkg/orb_web_bg.wasm"
 cp crates/orb-web/index.html "$out/"
 cp assets/app_icon.ico "$out/favicon.ico"
 if [[ -n "$index" ]]; then

@@ -81,6 +81,10 @@ jobs:
           if [ "$(wasm-bindgen --version 2>/dev/null)" != "wasm-bindgen $want" ]; then
             cargo install wasm-bindgen-cli --version "$want" --locked
           fi
+      # wasm-opt of binaryen at the version scripts/binaryen.sh pins (task-323), checked against
+      # its SHA-256. build-web.sh finds it in target/ and runs it on the page's module.
+      - name: Install wasm-opt
+        run: scripts/binaryen.sh
       # The collections at their current main, shallow (a blobless clone does not help:
       # `orb web-index` reads every file for its size, hash and mod name). The folders are
       # named songs and mods as in the repositories, and the commits that are checked out are

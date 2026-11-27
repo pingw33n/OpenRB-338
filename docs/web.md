@@ -310,6 +310,28 @@ inputs:
   memory unchanged (31 MB); the song `orion.rbs` then read and played its mod `Orbit2.rbm`.
   Before, with the shortcut, the scan took 0.2 s.
 
+### 7.5 wasm SIMD and wasm-opt (task-323, Chrome 157, macOS, 2026-11-27)
+
+The page's module is built with `-C target-feature=+simd128` and optimized by binaryen
+`wasm-opt -O3 -g --enable-simd` (version_133, `scripts/binaryen.sh`; flags in `docs/building.md`
+"The web page"). The worklet's module is built without the flag and is byte for byte the same.
+Measured in one Chrome tab at one window size on localhost, the page started in Classic
+(`theme = "classic"` in localStorage), then View > Modern; the time is the loading screen of
+"Drawing the panel" from its first update to its hiding (a MutationObserver on `#orb-loading`):
+
+| | before | after |
+|---|---|---|
+| Modern first drawing, runs | 3334, 3363, 3357 ms | 2167, 2129, 2111 ms (a first run after the new page's first load: 5278 ms, not repeated) |
+| median | 3357 ms | 2129 ms (median of all four: 2148 ms) |
+| start with Modern (navigation to the screen hidden) | 3355, 3417 ms | 2394, 2473, 2748 ms |
+| `orb_web_bg.wasm` raw | 19,121,175 bytes | 16,883,373 bytes |
+| gzip -9 | 9,222,400 bytes | 8,967,038 bytes |
+| name section / named functions | 2.47 MB / 16105 | 1.33 MB / 9178 |
+| `orb_worklet.wasm` | 320,382 | 320,382 (identical) |
+
+The name section is kept by `-g`: 16,105 named functions unoptimized, 9,178 with wasm-opt.
+The two changes were not measured apart. The classic start (no drawing) was not timed.
+
 ## 8. The collection index: `orb web-index` (task-173)
 
 The page cannot list a GitHub repository (60 unauthenticated API requests an hour) or read the
