@@ -1,3 +1,6 @@
 [toolchain]
 channel = "1.99.1"
 components = ["rustfmt", "clippy"]
+# The web engine (task-169, docs/building.md "The wasm build"): orb-engine, rbs and rbm build for
+# wasm32-unknown-unknown, and scripts/wasm-check.sh renders the corpus on wasm32-wasip1.
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1"]

@@ -154,6 +154,7 @@ The Windows build of OpenRB-338 is a GUI-subsystem exe (task-111), see "The Wind
 | `scripts/build.sh TARGET` | builds `orb` and `OpenRB-338` (profile `dist`) for the target into `dist/<target>/bin/` |
 | `scripts/package.sh TARGET` | `build.sh`, then packs `dist/<target>/OpenRB-338-<YYYY.MMDD.HHMM>-<target>.tar.gz|zip` (`SKIP_BUILD=1` packs the existing `bin/`) |
 | `scripts/validate-plugin.sh [DIR]` | downloads the pinned pluginval and runs it on `OpenRB-338.vst3` in `DIR` (default `target/bundled`); exit 1 on a failure (below, "The plugin") |
+| `scripts/wasm-check.sh` | renders the corpus natively and on wasm32-wasip1 under the pinned wasmtime and requires equal SHA-256s; exit 1 on a difference (below, "The wasm build") |
 | `scripts/build-all.sh [TARGET...]` | packages every target practical from this machine, and lists the skipped and failed ones |
 | `scripts/package-dmg.sh` | `scripts/package-dmg.sh TARGET` (a macOS target) builds it, then `dist/<target>/OpenRB-338-<YYYY.MMDD.HHMM>-<target>.dmg` (`SKIP_BUILD=1` uses the existing `bin/` folder) |
 | `scripts/package-installer.sh TARGET` | `build.sh` for a Windows target, then `dist/<target>/OpenRB-338-<YYYY.MMDD.HHMM>-<x64\|arm64>-setup.exe` with NSIS (`SKIP_BUILD=1` uses the existing `bin/`; `MAKENSIS` names makensis) |
@@ -467,6 +468,42 @@ in `target/debug`, so `crates/orb-plugin/tests/exports.rs` (it builds the plugin
 - The timing measurements marked `#[ignore]` (`merge_timing`, `part_cost`, ...) still say
   `cargo test --release`: their numbers are for the release profile.
 
+## The wasm build (task-169)
+
+The web version (m-6) runs the engine in an AudioWorklet as its own wasm instance (task-170), so
+orb-engine, rbs and rbm build for `wasm32-unknown-unknown` on the pinned stable toolchain:
+
+    cargo build --locked --target wasm32-unknown-unknown -p orb-engine -p rbs -p rbm
+
+`rust-toolchain.toml` lists the targets `wasm32-unknown-unknown` and `wasm32-wasip1`, so rustup
+installs them with the toolchain (an older install: `rustup target add wasm32-unknown-unknown
+wasm32-wasip1`). The three crates' normal dependencies on wasm are libm, sha2 (with digest,
+block-buffer, crypto-common, generic-array, typenum, cfg-if) and toml (serde_core, winnow,
+toml_parser, toml_writer, toml_datetime, serde_spanned): pure Rust, no getrandom, no C code
+(`cargo tree --target wasm32-unknown-unknown -e normal,build -p rbm`). Their library code uses no
+`std::fs`, threads or time (only their tests do); the two `HashMap`/`HashSet` of rbm (`pack.rs`,
+`recrypt.rs`) are only looked up, never iterated, so their hash keys do not matter.
+
+**The wasm-vs-native check.** `scripts/wasm-check.sh` (macOS and Linux, x86_64 or aarch64)
+renders the reference corpus with `crates/orb-wasm-check` twice: built natively, and built for
+`wasm32-wasip1` and run under wasmtime (reading the songs and the mods through WASI preopens).
+The program prints one line per entry of `tests/refs/manifest.json` (`SET/NAME FRAMES SHA256
+equal|DIFF`, the last word against the entry's `wav_sha256`), renders as `corpus_golden.rs` and
+`corpus_mods.rs` do (a fresh engine per song, every device, the built-in kit or the entry's
+recrypted mod), in parallel natively and one song after another on wasm (no threads). The script
+requires the two outputs to be identical and every line `equal`; exit 1 otherwise.
+
+- The sets: `diag`, `app` and `shipped` (164 songs, the built-in kit, no external input). With
+  `ORB_CD_ISO` set also `mod` and `modapp` (11 songs): the script recrypts the CD's four shipped
+  mods into a temporary folder (`orb mod recrypt --iso`) first.
+- wasmtime: no install. The script downloads the pinned release (wasmtime 51.0.0, the asset of
+  the host, checked against its SHA-256 from the release's digests) into
+  `target/wasmtime-v51.0.0/` and reuses it on the next run. A new version is an edit of the
+  script's version and four checksums.
+- Measured on this Mac (M-series, 10 cores; 2026-11-27): 164 songs, native 2 s, wasm 9 s; with
+  `ORB_CD_ISO`, 175 songs, native 3 s, wasm 15 s. All equal to native and to the manifest.
+- CI: the job `wasm` of `ci.yml` (below).
+
 ## GitHub Actions (`.github/workflows/`)
 
 Decisions of the user (2026-10-28): the cost of six release package jobs and the three-OS CI
@@ -509,6 +546,9 @@ Actions are pinned to a commit SHA (the version in a comment). No workflow uses 
   - `plugin validators` (task-204) on `ubuntu-22.04` and `macos-latest`: bundles the plugin and
     runs `scripts/validate-plugin.sh` (pluginval) and `scripts/test-pkg-scripts.sh` (the macOS
     plugin installer's preinstall script; see "The plugin").
+  - `wasm32 build and wasm-vs-native renders` (task-169) on `ubuntu-latest`: `cargo build
+    --locked --target wasm32-unknown-unknown -p orb-engine -p rbs -p rbm`, then
+    `scripts/wasm-check.sh` on the sets that need no external input (see "The wasm build").
 - `release.yml`, on a tag `v*` and by hand:
   - `prepare` computes one `SOURCE_DATE_EPOCH` and one `ORB_BUILD_BRANCH` (`scripts/release-env.sh`)
     so all packages agree. On a tag the build time is the tag's and a tag that is not

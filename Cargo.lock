@@ -3548,6 +3548,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "orb-wasm-check"
+version = "0.1.0"
+dependencies = [
+ "orb-engine",
+ "rbm",
+ "rbs",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "orbclient"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"

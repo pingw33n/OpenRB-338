@@ -96,3 +96,19 @@ jobs:
       - run: cargo xtask bundle orb-plugin --release
       - run: scripts/validate-plugin.sh
       - run: scripts/test-pkg-scripts.sh
+
+  wasm:
+    # The web engine (task-169, docs/building.md "The wasm build"): orb-engine, rbs and rbm build
+    # for wasm32-unknown-unknown, and the corpus sets that need no external input (diag, app,
+    # shipped) render under wasmtime (wasm32-wasip1) with the SHA-256s of the native renders
+    # (scripts/wasm-check.sh; it fetches the pinned wasmtime by SHA-256). Both targets come from
+    # rust-toolchain.toml.
+    name: wasm32 build and wasm-vs-native renders
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: wasm
+      - run: cargo build --locked --target wasm32-unknown-unknown -p orb-engine -p rbs -p rbm
+      - run: scripts/wasm-check.sh

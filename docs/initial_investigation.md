@@ -1503,6 +1503,19 @@ reached through `dword_1011D0B0`.
    pointer array at 0x10030010..0x10030060 (0x10003740, 0x10017840, 0x1001A920, 0x10021CD0,
    0x10026BB0). Builder constants sit in `.data1` (0x1014F000..) and `_data` (0x10156000..),
    which are in the file, unlike `.data` above 0x10034400.
+
+   [C] task-169: the same holds on wasm32. The engine's library code calls no std float
+   function but `f64::sqrt` (`tables/mod.rs`, the IEEE square root, exact on every target);
+   every transcendental is libm's, whose wasm32 routines are the same Rust code as on x86_64 and
+   aarch64. libm 0.2.16's arch overrides (`src/math/arch/mod.rs`) are few and all correctly
+   rounded: on x86_64 (SSE2) `sqrt` and `fma`, on aarch64 (NEON) `sqrt`, `fma` and `rint`; the
+   wasm32 ones (`ceil`, `floor`, `trunc`, `rint`, `fabs`, `sqrt`) are compiled only with
+   `intrinsics_enabled` (nightly), so on stable wasm32 none applies and every libm function is the
+   generic code. Rust does not contract `a * b + c` into an FMA on any target. The 175 corpus
+   renders (diag, app, shipped, mod, modapp) built for wasm32-wasip1 and run under wasmtime
+   51.0.0 have the SHA-256s of the native (aarch64-apple-darwin) renders and of the manifest
+   (`scripts/wasm-check.sh`, docs/building.md "The wasm build"): no 32-bit `usize`, cast or
+   hashing difference reaches the output.
 5. **Export start state** (§9): traced in `docs/export_state.md` (task-004); the protocol is
    settled by experiment in task-010.
 6. **Loop-end wrap inside the final pre-rendered block.** The last block can wrap to the loop start

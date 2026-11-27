@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rbs", "crates/orb-engine", "crates/orb-cli", "crates/rbm", "crates/orb-player", "crates/orb-ui-art", "crates/orb-ui", "crates/orb-testkit", "crates/orb-plugin", "xtask"]
+members = ["crates/rbs", "crates/orb-engine", "crates/orb-cli", "crates/rbm", "crates/orb-player", "crates/orb-ui-art", "crates/orb-ui", "crates/orb-testkit", "crates/orb-plugin", "crates/orb-wasm-check", "xtask"]
 # Patched copies of crates.io crates (the [patch.crates-io] below), not members.
 exclude = ["vendor"]
 
