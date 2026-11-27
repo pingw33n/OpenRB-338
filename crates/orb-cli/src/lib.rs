@@ -4,6 +4,7 @@
 
 pub mod cd;
 pub mod encode;
+pub mod fs;
 pub mod info;
 pub mod mods;
 pub mod recrypt;

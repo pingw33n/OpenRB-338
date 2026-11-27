@@ -59,7 +59,7 @@ impl ModOpts {
             .map(|p| ("--mod-dir".to_string(), p))
             .or_else(|| env_path("ORB_MOD_DIR").map(|p| ("ORB_MOD_DIR".to_string(), p)));
         if let Some((what, p)) = explicit {
-            return if p.is_dir() {
+            return if crate::fs::is_dir(&p) {
                 Ok(Some(p))
             } else {
                 Err(fail(
@@ -68,7 +68,9 @@ impl ModOpts {
                 ))
             };
         }
-        Ok(implicit_dirs("Mods").into_iter().find(|d| d.is_dir()))
+        Ok(implicit_dirs("Mods")
+            .into_iter()
+            .find(|d| crate::fs::is_dir(d)))
     }
 
     /// Whether a mod folder was asked for (`--mod-dir` or the environment).
@@ -158,26 +160,31 @@ pub fn byte_order(a: &Path, b: &Path) -> std::cmp::Ordering {
 
 /// The `.rbm` files of `dir` in [`byte_order`], each with its INFO menu name when it has one.
 pub fn scan(dir: &Path) -> Result<Vec<(PathBuf, Option<String>)>, Fail> {
-    let rd = std::fs::read_dir(dir).map_err(|e| {
+    let rd = crate::fs::read_dir(dir).map_err(|e| {
         fail(
             1,
             format!("{}: cannot read the mod folder: {e}", dir.display()),
         )
     })?;
     let mut files: Vec<PathBuf> = rd
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("rbm")))
+        .into_iter()
+        .filter(|p| {
+            crate::fs::is_file(p) && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("rbm"))
+        })
         .collect();
     files.sort_by(|a, b| byte_order(a, b));
     Ok(files
         .into_iter()
         .map(|p| {
-            // a file that is no mod has no name and matches nothing
-            let name = std::fs::read(&p)
-                .ok()
-                .and_then(|b| Rbm::parse(b).ok())
-                .and_then(|r| r.info().map(|i| i.name.clone()));
+            // a file that is no mod has no name and matches nothing; a mod the web page has not
+            // read yet has the name read from its INFO alone (`crate::fs::insert_lazy`)
+            let name = match crate::fs::lazy_info(&p) {
+                Some(info) => info.map(|i| i.name),
+                None => crate::fs::read(&p)
+                    .ok()
+                    .and_then(|b| Rbm::parse(b).ok())
+                    .and_then(|r| r.info().map(|i| i.name.clone())),
+            };
             (p, name)
         })
         .collect())
@@ -217,11 +224,11 @@ pub fn find_preferring(
 /// The kit of a song whose GLOB names `mod_name`. `label` names the song in messages.
 pub fn resolve(opts: &ModOpts, label: &str, mod_name: &str) -> Result<Kit, Fail> {
     if let Some(f) = &opts.mod_file {
-        if !f.is_file() {
+        if !crate::fs::is_file(f) {
             return Err(fail(1, format!("--mod {}: no such file", f.display())));
         }
         // the original loads the mod the song names, by its INFO name (sub_4155D1)
-        let info = std::fs::read(f)
+        let info = crate::fs::read(f)
             .ok()
             .and_then(|b| Rbm::parse(b).ok())
             .and_then(|r| r.info().map(|i| i.name.clone()));

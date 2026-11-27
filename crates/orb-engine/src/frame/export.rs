@@ -101,25 +101,104 @@ fn render_idle_into(engine: &mut Engine, idle_blocks: u32, buf: &mut [i16]) {
 /// [`super::Fault`] writes nothing ([`Engine::fault`]), so its chunk repeats what the buffer
 /// held: the previous chunk's samples, or the idle calls', or zeros.
 pub fn export(engine: &mut Engine, range: ExportRange, idle_blocks: u32) -> Vec<i16> {
-    let mut buf = vec![0i16; 2 * CHUNK_FRAMES as usize];
-    render_idle_into(engine, idle_blocks, &mut buf);
-    engine.stop();
-    engine.render(&mut [], 0);
-    engine.locate(range.loop_start);
-    engine.play();
-    engine.render(&mut [], 0);
-    let mut out = Vec::with_capacity(2 * frame_count(range));
-    for n in chunk_sizes(range) {
-        // rbhost writes only positive counts; the app would pass a negative byte count to its
-        // writer, which never happens for a loop of positive length
-        let n = n.max(0) as usize;
-        engine.render(&mut buf, n);
-        out.extend_from_slice(&buf[..2 * n]);
+    let mut e = Export::new(range, idle_blocks);
+    while !e.step(engine, usize::MAX) {}
+    e.into_samples()
+}
+
+/// [`export`] in steps (the web build's export runs on the page's one thread, a slice per
+/// frame, task-172): the same engine calls in the same order, on the same one buffer.
+/// [`Export::step`] makes up to a given number of the calls that render frames (the idle calls
+/// and the chunks); the 0-frame calls and the messages between them go with the first chunk
+/// (the start) and the last chunk (the end).
+pub struct Export {
+    range: ExportRange,
+    buf: Vec<i16>,
+    /// The idle calls of 1024 frames, and the frames of the last idle call (0: none).
+    idle_calls: u32,
+    idle_rest: usize,
+    chunks: Vec<i32>,
+    /// The rendering calls made so far: the idle calls first, then the chunks.
+    done: usize,
+    out: Vec<i16>,
+    finished: bool,
+}
+
+impl Export {
+    /// The export of `range` after `idle_blocks` idle blocks, of a song the caller has loaded
+    /// and activated (as for [`export`]); nothing is rendered yet.
+    pub fn new(range: ExportRange, idle_blocks: u32) -> Export {
+        Export {
+            range,
+            buf: vec![0i16; 2 * CHUNK_FRAMES as usize],
+            idle_calls: idle_blocks / 16,
+            idle_rest: (idle_blocks % 16) as usize * BLOCK,
+            chunks: chunk_sizes(range),
+            done: 0,
+            out: Vec::with_capacity(2 * frame_count(range)),
+            finished: false,
+        }
     }
-    engine.stop();
-    engine.reset();
-    engine.render(&mut [], 0);
-    out
+
+    /// The idle calls, the remainder's included.
+    fn idle_total(&self) -> usize {
+        self.idle_calls as usize + usize::from(self.idle_rest > 0)
+    }
+
+    /// The rendering calls of the whole export.
+    pub fn total(&self) -> usize {
+        self.idle_total() + self.chunks.len()
+    }
+
+    /// The rendering calls made so far (of [`Export::total`]).
+    pub fn done(&self) -> usize {
+        self.done
+    }
+
+    /// Makes up to `calls` rendering calls; true once the export is complete (the samples are
+    /// then [`Export::into_samples`], and a further step does nothing).
+    pub fn step(&mut self, engine: &mut Engine, calls: usize) -> bool {
+        let idle = self.idle_total();
+        let mut left = calls;
+        while !self.finished && left > 0 {
+            if self.done < self.idle_calls as usize {
+                engine.render(&mut self.buf, REALTIME_FRAMES);
+            } else if self.done < idle {
+                engine.render(&mut self.buf, self.idle_rest);
+            } else {
+                let i = self.done - idle;
+                if i == 0 {
+                    engine.stop();
+                    engine.render(&mut [], 0);
+                    engine.locate(self.range.loop_start);
+                    engine.play();
+                    engine.render(&mut [], 0);
+                }
+                if let Some(&n) = self.chunks.get(i) {
+                    // rbhost writes only positive counts; the app would pass a negative byte
+                    // count to its writer, which never happens for a loop of positive length
+                    let n = n.max(0) as usize;
+                    engine.render(&mut self.buf, n);
+                    self.out.extend_from_slice(&self.buf[..2 * n]);
+                }
+                if i + 1 >= self.chunks.len() {
+                    engine.stop();
+                    engine.reset();
+                    engine.render(&mut [], 0);
+                    self.finished = true;
+                }
+            }
+            self.done += 1;
+            left -= 1;
+        }
+        self.finished
+    }
+
+    /// The exported samples, interleaved int16 stereo (all of them once [`Export::step`] has
+    /// returned true).
+    pub fn into_samples(self) -> Vec<i16> {
+        self.out
+    }
 }
 
 /// rbhost's whole run on a new song (by default, `--idle-blocks N`): load `song`, activate it
@@ -131,15 +210,23 @@ pub fn export_song(
     song: &Song,
     idle_blocks: u32,
 ) -> Result<Vec<i16>, LoadRefused> {
+    let mut e = export_song_steps(engine, song, idle_blocks)?;
+    while !e.step(engine, usize::MAX) {}
+    Ok(e.into_samples())
+}
+
+/// [`export_song`] in steps ([`Export`]): loads and activates `song` and returns the export,
+/// whose rendering calls are its steps'.
+pub fn export_song_steps(
+    engine: &mut Engine,
+    song: &Song,
+    idle_blocks: u32,
+) -> Result<Export, LoadRefused> {
     engine.load(song)?;
     engine.activate(Activation::ReplacesCurrent {
         current_playing: false,
     });
-    Ok(export(
-        engine,
-        ExportRange::from(&song.globals),
-        idle_blocks,
-    ))
+    Ok(Export::new(ExportRange::from(&song.globals), idle_blocks))
 }
 
 /// The 44-byte header rbhost and the app write before the samples (16-bit stereo 44100 Hz PCM).

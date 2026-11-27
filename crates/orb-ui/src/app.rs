@@ -126,9 +126,11 @@ pub struct App {
     pub(crate) notified: std::collections::HashMap<String, u32>,
     /// The audio stream's health (None: no stream), checked every frame: a lost device or a
     /// stall is reported once (`App::check_audio`), as in `orb play` (task-139).
+    #[cfg(not(target_arch = "wasm32"))]
     pub audio_health: Option<orb_player::output::Health>,
     /// The owner of the output stream (the standalone app; `None` in a plugin, in the tests
     /// and in the demo): the Audio Output window drives it and `App::check_audio` polls it.
+    #[cfg(not(target_arch = "wasm32"))]
     pub audio: Option<orb_player::control::Controller>,
     audio_reported: bool,
     /// Where the box's OK button was drawn last (`App::error_ok_rect`).
@@ -215,8 +217,11 @@ pub struct App {
     pub(crate) mod_info_shown: Option<crate::mod_info::SplashShown>,
     /// The Options > Audio Output window (task-191): open, the number of its opens (its id)
     /// and what it knows of the drivers and devices (`App::audio_ui`).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) audio_open: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) audio_serial: u32,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) audio_ui: crate::audio_window::AudioUi,
     /// The same for the Help > Keyboard Shortcuts window (`App::key_help_ui`).
     pub(crate) key_help_open: bool,
@@ -257,9 +262,20 @@ pub struct App {
     last_px_scale: Option<f32>,
     resize_until: f64,
     /// The frames `show` has drawn.
-    shown: u64,
+    pub(crate) shown: u64,
     /// The plugin, when this is a plugin's editor (`App::embedded`, task-201).
     pub(crate) plugin: Option<crate::embed::Plugin>,
+    /// The web page's `?debug-panic`: the next frame panics (`App::web_frame`, task-172).
+    #[cfg(target_arch = "wasm32")]
+    pub web_debug_panic: bool,
+    /// The open document's number: a new one each time a song replaces it (open, New, a drop,
+    /// the start), not on a save. What is kept for one document is kept with its number.
+    pub(crate) doc_serial: u64,
+    /// The web page's song file: the document's number, its memory path and where the browser
+    /// saves it (the file handle of `showSaveFilePicker`, or a download); Save writes there
+    /// again only for that document at that path (task-172).
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) web_target: Option<(u64, std::path::PathBuf, crate::web::SaveTarget)>,
 }
 
 impl App {
@@ -274,7 +290,9 @@ impl App {
             settled: false,
             errors: Default::default(),
             notified: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             audio_health: None,
+            #[cfg(not(target_arch = "wasm32"))]
             audio: None,
             audio_reported: false,
             error_ok: None,
@@ -317,8 +335,11 @@ impl App {
             mod_info_serial: 0,
             mod_details: None,
             mod_info_shown: None,
+            #[cfg(not(target_arch = "wasm32"))]
             audio_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
             audio_serial: 0,
+            #[cfg(not(target_arch = "wasm32"))]
             audio_ui: Default::default(),
             key_help_open: false,
             key_help_serial: 0,
@@ -343,7 +364,18 @@ impl App {
             resize_until: f64::NEG_INFINITY,
             shown: 0,
             plugin: None,
+            #[cfg(target_arch = "wasm32")]
+            web_debug_panic: false,
+            doc_serial: 0,
+            #[cfg(target_arch = "wasm32")]
+            web_target: None,
         }
+    }
+
+    /// The open document's number: it changes whenever another
+    /// song replaces the document, and only then.
+    pub fn doc_serial(&self) -> u64 {
+        self.doc_serial
     }
 
     /// The skin the main window's panel is drawn with.
@@ -530,6 +562,8 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         egui_extras::install_image_loaders(ui.ctx());
+        #[cfg(target_arch = "wasm32")]
+        self.web_frame(&ui.ctx().clone());
         self.close_check(&ui.ctx().clone());
         self.show(ui);
         self.screenshot(ui.ctx());
@@ -654,14 +688,28 @@ pub struct PartTextures {
     swept: u64,
     /// The textures drawn as placeholders in this frame, to rasterize (`flush_part_textures`).
     pending: Vec<PendingTexture>,
+    /// The web page: the size each part was last rasterized at (not only asked for, as
+    /// `latest`). A part whose new size waits for its slice is drawn from that texture meanwhile,
+    /// so a resize never shows a half-drawn panel (task-172).
+    #[cfg(target_arch = "wasm32")]
+    ready: std::collections::HashMap<usize, (u32, u32)>,
 }
 
 #[derive(Clone)]
 struct PendingTexture {
+    /// The web page: its key in `PartTextures::map`, and whether the part has no rasterized
+    /// texture of any size kept (a skin drawn for the first time: the page covers the panel
+    /// with its drawing progress until no such part waits, `orb_ui::web::redraw_progress`).
+    #[cfg(target_arch = "wasm32")]
+    key: (usize, u32, u32),
+    #[cfg(target_arch = "wasm32")]
+    fresh: bool,
     svg: &'static [u8],
     size: [u32; 2],
     /// A smaller size to rasterize first, when the full size is dense (`PREVIEW_DENSITY`): the
     /// full size follows on a background thread.
+    /// (The web page has no background thread: it rasterizes the full size.)
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     preview: Option<[u32; 2]>,
     handle: egui::TextureHandle,
     options: egui::TextureOptions,
@@ -710,6 +758,7 @@ fn raster(svg: &[u8], size: [u32; 2]) -> Option<egui::ColorImage> {
 }
 
 /// Rasterizes the jobs (svg, size) on `threads` threads, the biggest first.
+#[cfg(not(target_arch = "wasm32"))]
 fn raster_all(jobs: &[(&'static [u8], [u32; 2])], threads: usize) -> Vec<Option<egui::ColorImage>> {
     let mut order: Vec<usize> = (0..jobs.len()).collect();
     order.sort_by_key(|&i| std::cmp::Reverse(jobs[i].1[0] * jobs[i].1[1]));
@@ -783,11 +832,33 @@ impl PartTextures {
         Some(egui::load::SizedTexture::new(t.handle.id(), t.source_size))
     }
 
+    /// The web page: the texture of the part `uri` at the last size rasterized, if it is kept.
+    #[cfg(target_arch = "wasm32")]
+    fn ready_size(&mut self, uri: usize, pass: u64) -> Option<egui::load::SizedTexture> {
+        let &(w, h) = self.ready.get(&uri)?;
+        self.get(&(uri, w, h), pass)
+    }
+
     /// The texture of the part `uri` at the size it was last rasterized at, if it is kept.
     fn last_size(&mut self, uri: usize, pass: u64) -> Option<egui::load::SizedTexture> {
         let &(w, h) = self.latest.get(&uri)?;
         self.get(&(uri, w, h), pass)
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// The parts the web page has rasterized so far (its loading progress, `orb_ui::web`).
+    pub(crate) static RASTERIZED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The part textures waiting to be rasterized (drawn as placeholders until then).
+pub fn pending_parts(ctx: &egui::Context) -> usize {
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<PartTextures>(PartTextures::id())
+            .pending
+            .len()
+    })
 }
 
 /// Rasterizes the part textures the frame drew as placeholders, on all the CPU's cores (one
@@ -804,6 +875,48 @@ pub fn flush_part_textures(ctx: &egui::Context) {
     if pending.is_empty() {
         return;
     }
+    #[cfg(target_arch = "wasm32")]
+    flush_slice(ctx, pending);
+    #[cfg(not(target_arch = "wasm32"))]
+    flush_threads(ctx, pending);
+}
+
+/// The web page has one thread: the parts are rasterized a slice per frame (30 ms), so the
+/// page stays responsive and its loading screen shows the progress (task-172); the rest wait
+/// for the next frame, which is asked for at once.
+#[cfg(target_arch = "wasm32")]
+fn flush_slice(ctx: &egui::Context, mut pending: Vec<PendingTexture>) {
+    let t0 = web_time::Instant::now();
+    let mut done = 0;
+    while done < pending.len() && t0.elapsed() < std::time::Duration::from_millis(30) {
+        let p = &mut pending[done];
+        if let Some(image) = raster(p.svg, p.size) {
+            p.handle.set(image, p.options);
+        }
+        done += 1;
+    }
+    let rest = pending.split_off(done);
+    RASTERIZED.with(|n| n.set(n.get() + done));
+    let fresh_done = pending.iter().filter(|p| p.fresh).count();
+    let fresh_left = rest.iter().filter(|p| p.fresh).count();
+    ctx.data_mut(|d| {
+        let t = d.get_temp_mut_or_default::<PartTextures>(PartTextures::id());
+        for p in &pending {
+            t.ready.insert(p.key.0, (p.key.1, p.key.2));
+        }
+        if !rest.is_empty() {
+            t.pending.extend(rest);
+        }
+    });
+    crate::web::redraw_progress(fresh_done, fresh_left);
+    if pending_parts(ctx) > 0 {
+        ctx.request_repaint();
+    }
+}
+
+/// [`flush_part_textures`] on all the CPU's cores, with previews (`PREVIEW_DENSITY`).
+#[cfg(not(target_arch = "wasm32"))]
+fn flush_threads(ctx: &egui::Context, pending: Vec<PendingTexture>) {
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     // Previews when many parts are missing at once (the start, the end of a resize), not for
     // a part or two (a piece of the logo fading in). Where there are no threads (a browser)
@@ -880,6 +993,18 @@ pub(crate) fn part_texture(
         t.get(&key, pass)
             .or_else(|| resizing.then(|| t.last_size(key.0, pass)).flatten())
     });
+    // the web page: a size still waiting for its slice is drawn from the last rasterized one
+    #[cfg(target_arch = "wasm32")]
+    let found = found.map(|f| {
+        ctx.data_mut(|d| {
+            let t = d.get_temp_mut_or_default::<PartTextures>(PartTextures::id());
+            if t.pending.iter().any(|p| p.handle.id() == f.id) {
+                t.ready_size(key.0, pass).unwrap_or(f)
+            } else {
+                f
+            }
+        })
+    });
     if found.is_some() || first {
         return found;
     }
@@ -899,9 +1024,15 @@ pub(crate) fn part_texture(
     let blank = egui::ColorImage::filled([1, 1], Color32::TRANSPARENT);
     let handle = ctx.load_texture(uri, blank, options);
     let texture = egui::load::SizedTexture::new(handle.id(), pixels);
-    ctx.data_mut(|d| {
+    let shown = ctx.data_mut(|d| {
         let t = d.get_temp_mut_or_default::<PartTextures>(PartTextures::id());
+        #[cfg(target_arch = "wasm32")]
+        let ready = t.ready_size(key.0, pass);
         t.pending.push(PendingTexture {
+            #[cfg(target_arch = "wasm32")]
+            key,
+            #[cfg(target_arch = "wasm32")]
+            fresh: ready.is_none(),
             svg,
             size,
             preview,
@@ -917,8 +1048,11 @@ pub(crate) fn part_texture(
             },
         );
         t.latest.insert(key.0, (key.1, key.2));
+        #[cfg(target_arch = "wasm32")]
+        let texture = ready.unwrap_or(texture);
+        texture
     });
-    Some(texture)
+    Some(shown)
 }
 
 /// The id under which `App::show` keeps the egui time a resize counts as going on until.
@@ -998,6 +1132,7 @@ impl App {
     /// `orb_player::output::Health`); a transient stream error that the sound survives is only
     /// logged by the stream. It runs on every frame, so a device lost while the UI is idle is
     /// reported on the next frame it repaints.
+    #[cfg(not(target_arch = "wasm32"))]
     fn check_audio(&mut self, ctx: &egui::Context) {
         // the owner of the stream (task-191): it reopens on the new default device or after a
         // lost one, and says what it did
@@ -1016,6 +1151,21 @@ impl App {
         if let Some(why) = self.audio_health.as_ref().and_then(|h| h.failure()) {
             self.audio_reported = true;
             self.fail(format!("Audio output: {why}"));
+        }
+    }
+
+    /// The web page's audio (task-172, `docs/web.md`): the worklet's errors (a malformed
+    /// message, a panic of its module) are shown once, in the message box; its output is silent
+    /// from then on.
+    #[cfg(target_arch = "wasm32")]
+    fn check_audio(&mut self, _ctx: &egui::Context) {
+        let Some(link) = &mut self.link else {
+            return;
+        };
+        let errors = link.player().take_errors();
+        if !errors.is_empty() && !self.audio_reported {
+            self.audio_reported = true;
+            self.fail(format!("Audio output: {}", errors.join("; ")));
         }
     }
 
@@ -1070,12 +1220,14 @@ impl App {
                 self.focus_click(ui, &view, layout);
             }
         } else if self.browser.is_none() && !self.asking() && !self.error_open() {
+            // a shortcut does what its menu item does (the web's File > Open is the browser's
+            // picker, task-172)
             if shortcuts::consume(ui, &shortcuts::NEW) {
-                self.new_song();
+                self.command(Cmd::New);
             } else if shortcuts::consume(ui, &shortcuts::OPEN) {
-                self.open_browser(Mode::OpenSong);
+                self.command(Cmd::Open);
             } else if !self.is_plugin() && shortcuts::consume(ui, &shortcuts::SAVE) {
-                self.save();
+                self.command(Cmd::Save);
             } else if shortcuts::consume(ui, &shortcuts::INFO) {
                 // File > Info (task-310); nothing without a song, as the item is disabled
                 if self.link.is_some() {
@@ -1186,9 +1338,13 @@ impl App {
             // the engine's side of the panel moves, else not at all (input repaints). Without
             // a working audio stream the snapshot never moves.
             // (a plugin's engine runs in the host)
+            #[cfg(not(target_arch = "wasm32"))]
             let sound = (self.audio_health.is_some() && !self.audio_reported)
                 || self.audio.as_ref().is_some_and(|c| c.is_open())
                 || self.plugin.is_some();
+            // the web page's worklet plays while the page is open (its errors: `check_audio`)
+            #[cfg(target_arch = "wasm32")]
+            let sound = !self.audio_reported;
             if sound && link.moving(&self.panel) {
                 ui.ctx().request_repaint_after(METER_FRAME);
             }
@@ -1213,6 +1369,7 @@ impl App {
         self.drum_editors_ui(&ctx);
         self.about_ui(&ctx);
         self.key_help_ui(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
         self.audio_ui(&ctx);
         self.plugin_usage_ui(&ctx);
         self.routing_ui(&ctx);

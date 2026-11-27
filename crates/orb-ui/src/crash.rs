@@ -141,6 +141,8 @@ pub fn write_log(dir: &Path, secs: i64, text: &str, keep: usize) -> std::io::Res
     };
     file.write_all(text.as_bytes())?;
     file.flush()?;
+    // (wasm32's `File` has no `Drop`: the crash log is native only)
+    #[cfg_attr(target_arch = "wasm32", allow(clippy::drop_non_drop))]
     drop(file);
     let _ = rotate(dir, keep);
     Ok(path)
@@ -312,6 +314,7 @@ fn handle(version: &str, info: &PanicHookInfo) {
             "OpenRB-338: the crash log could not be saved: {e}"
         )),
     }
+    #[cfg(not(target_arch = "wasm32"))]
     if !no_dialog() {
         let _ = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)

@@ -94,6 +94,13 @@ pub enum ExportFormat {
 
 impl ExportFormat {
     pub const ALL: [ExportFormat; 3] = [ExportFormat::Wav, ExportFormat::Flac, ExportFormat::Ogg];
+    /// The formats the Export browser offers: all natively; FLAC only on the web, whose Export
+    /// asks the browser where to save and has no format choice (the user's decision of
+    /// 2026-11-27, narrowing task-170's WAV and FLAC).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub const OFFERED: &[ExportFormat] = &Self::ALL;
+    #[cfg(target_arch = "wasm32")]
+    pub const OFFERED: &[ExportFormat] = &[ExportFormat::Flac];
 
     pub fn extension(self) -> &'static str {
         match self {
@@ -138,7 +145,7 @@ pub enum ModStatus {
 impl ModStatus {
     /// Reads the mod at `path` the way `orb` does to decide whether it can load its samples.
     pub fn of(path: &Path) -> Self {
-        let data = match std::fs::read(path) {
+        let data = match orb_cli::fs::read(path) {
             Ok(d) => d,
             Err(e) => return ModStatus::Invalid(format!("cannot read: {e}")),
         };
@@ -214,7 +221,7 @@ impl Browser {
         let dir = [last, configured]
             .into_iter()
             .flatten()
-            .find(|d| d.is_dir())
+            .find(|d| orb_cli::fs::is_dir(d))
             .cloned()
             .unwrap_or_else(settings::documents_dir);
         let mut b = Self {
@@ -249,7 +256,7 @@ impl Browser {
     /// An explicit start-folder override: starts in `dir` when it is a folder, whatever the
     /// settings remember. The app does not use it; tests do.
     pub fn with_dir(mut self, dir: &Path) -> Self {
-        if dir.is_dir() {
+        if orb_cli::fs::is_dir(dir) {
             self.go(dir.to_path_buf());
         }
         self
@@ -352,21 +359,22 @@ impl Browser {
     }
 
     fn read_entries(&self, dir: &Path) -> Result<Vec<Entry>, String> {
-        let rd =
-            std::fs::read_dir(dir).map_err(|e| format!("{}: cannot open: {e}", dir.display()))?;
+        let rd = orb_cli::fs::read_dir(dir)
+            .map_err(|e| format!("{}: cannot open: {e}", dir.display()))?;
         let exts = self.extensions();
         let mut out = Vec::new();
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
+        for path in rd {
+            let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+                continue;
+            };
             if name.starts_with('.') {
                 continue;
             }
-            let path = e.path();
             // `metadata` follows links, so a link to a folder is a folder.
-            let Ok(md) = std::fs::metadata(&path) else {
+            let Ok(md) = orb_cli::fs::metadata(&path) else {
                 continue;
             };
-            let dir = md.is_dir();
+            let dir = md.is_dir;
             if !dir && !self.show_all {
                 let ext = path
                     .extension()
@@ -380,7 +388,7 @@ impl Browser {
                 name,
                 path,
                 dir,
-                size: md.len(),
+                size: md.len,
             });
         }
         out.sort_by_key(|e| (!e.dir, e.name.to_lowercase()));
@@ -463,12 +471,12 @@ impl Browser {
         let text = self.path_text.trim();
         let p = expand_home(text);
         let p = if p.is_relative() { self.dir.join(p) } else { p };
-        if p.is_dir() {
+        if orb_cli::fs::is_dir(&p) {
             self.go(p);
             Poll::Open
-        } else if p.is_file() && !self.mode.writes() {
+        } else if orb_cli::fs::is_file(&p) && !self.mode.writes() {
             self.finish(p, settings)
-        } else if p.is_file() {
+        } else if orb_cli::fs::is_file(&p) {
             self.error = Some(format!(
                 "{text} is a file; type its name in the Name field, or enter a folder here."
             ));
@@ -558,22 +566,22 @@ impl Browser {
             }
         };
         if self.mode.writes() {
-            if path.is_dir() {
+            if orb_cli::fs::is_dir(&path) {
                 self.error = Some(format!("{} is a folder.", path.display()));
                 return Poll::Open;
             }
-            if !self.dir.is_dir() {
+            if !orb_cli::fs::is_dir(&self.dir) {
                 self.error = Some(format!(
                     "{}: the folder does not exist.",
                     self.dir.display()
                 ));
                 return Poll::Open;
             }
-            if std::fs::metadata(&self.dir).is_ok_and(|m| m.permissions().readonly()) {
+            if orb_cli::fs::metadata(&self.dir).is_ok_and(|m| m.readonly) {
                 self.error = Some(format!("{}: the folder is read-only.", self.dir.display()));
                 return Poll::Open;
             }
-            if path.exists() {
+            if orb_cli::fs::exists(&path) {
                 self.error = None;
                 self.confirm = Some(path);
                 return Poll::Open;
@@ -612,7 +620,7 @@ impl Browser {
                     return Poll::Open;
                 }
             }
-        } else if !self.mode.writes() && !path.is_file() {
+        } else if !self.mode.writes() && !orb_cli::fs::is_file(&path) {
             self.error = Some(format!("{}: no such file.", path.display()));
             return Poll::Open;
         }
@@ -778,7 +786,7 @@ impl Browser {
                             .desired_width(w.max(60.0)),
                     );
                     if self.mode == Mode::Export {
-                        for f in ExportFormat::ALL {
+                        for &f in ExportFormat::OFFERED {
                             let on = self.format == f;
                             if ui.selectable_label(on, f.extension()).clicked() && !on {
                                 self.set_format(f);
@@ -870,7 +878,10 @@ impl Browser {
                 .unwrap_or_else(settings::documents_dir);
             places.push(("Songs".into(), songs));
             places.push(("Mods".into(), mods));
-            places.push(("Documents".into(), settings::documents_dir()));
+            // the web page has no documents folder of its own: it is the songs folder there
+            if !cfg!(target_arch = "wasm32") {
+                places.push(("Documents".into(), settings::documents_dir()));
+            }
             if let Some(h) = settings::home_dir() {
                 places.push(("Home".into(), h));
             }

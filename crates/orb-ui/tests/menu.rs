@@ -625,6 +625,48 @@ fn save_and_save_as_reopen_identically() {
     assert_engine_tracks(&read_rbs(&again), &mut h2.audio);
 }
 
+/// The web page keeps where Save As wrote (a browser file handle) for one document: its number
+/// (`App::doc_serial`) must change when another song replaces the document, even one with the
+/// same file name, and must not change on a save (task-172's review: a song opened after a
+/// Save As saved into the earlier file's handle).
+#[test]
+fn the_document_number_changes_with_the_song_and_not_with_a_save() {
+    let src = root().join("tests/songs/diag/songs/303_saw_lowcut.rbs");
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = Harness::new();
+    let start = h.app.doc_serial();
+    h.open(&src);
+    let opened = h.app.doc_serial();
+    assert_ne!(opened, start, "open");
+
+    let a = dir.path().join("a.rbs");
+    h.app.command(Cmd::SaveAs);
+    h.app.chosen(Mode::SaveSong, a.clone());
+    assert_eq!(h.app.doc.path.as_deref(), Some(a.as_path()));
+    h.app.command(Cmd::Save);
+    assert_eq!(
+        h.app.doc_serial(),
+        opened,
+        "Save As and Save keep the document"
+    );
+
+    // another song of the same name: another document
+    let other = dir.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    let b = other.join("a.rbs");
+    std::fs::copy(&src, &b).unwrap();
+    h.open(&b);
+    let reopened = h.app.doc_serial();
+    assert_ne!(reopened, opened, "a song of the same name");
+    // the same file again: another document too
+    h.open(&a);
+    assert_ne!(h.app.doc_serial(), reopened, "the same file reopened");
+
+    let before = h.app.doc_serial();
+    h.app.new_now();
+    assert_ne!(h.app.doc_serial(), before, "New");
+}
+
 #[test]
 fn save_without_a_file_asks_for_one_and_a_failed_write_is_shown() {
     let mut h = Harness::new();

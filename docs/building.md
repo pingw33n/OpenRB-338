@@ -156,6 +156,7 @@ The Windows build of OpenRB-338 is a GUI-subsystem exe (task-111), see "The Wind
 | `scripts/validate-plugin.sh [DIR]` | downloads the pinned pluginval and runs it on `OpenRB-338.vst3` in `DIR` (default `target/bundled`); exit 1 on a failure (below, "The plugin") |
 | `scripts/wasm-check.sh` | renders the corpus natively and on wasm32-wasip1 under the pinned wasmtime and requires equal SHA-256s; exit 1 on a difference (below, "The wasm build") |
 | `scripts/web-demo.sh [--serve [PORT]]` | builds the web player's worklet module and test page into `target/web-demo/` and serves it at `http://localhost:PORT/` (below, "The web player") |
+| `scripts/build-web.sh [--serve [PORT]]` | builds OpenRB-338 as a web page into `dist/web/` and serves it at `http://localhost:PORT/OpenRB-338/web/` (below, "The web page") |
 | `scripts/build-all.sh [TARGET...]` | packages every target practical from this machine, and lists the skipped and failed ones |
 | `scripts/package-dmg.sh` | `scripts/package-dmg.sh TARGET` (a macOS target) builds it, then `dist/<target>/OpenRB-338-<YYYY.MMDD.HHMM>-<target>.dmg` (`SKIP_BUILD=1` uses the existing `bin/` folder) |
 | `scripts/package-installer.sh TARGET` | `build.sh` for a Windows target, then `dist/<target>/OpenRB-338-<YYYY.MMDD.HHMM>-<x64\|arm64>-setup.exe` with NSIS (`SKIP_BUILD=1` uses the existing `bin/`; `MAKENSIS` names makensis) |
@@ -529,6 +530,45 @@ The web audio path is described in `docs/web.md`. What builds it:
   built-in kit and three shipped songs).
 - CI: the job `wasm` builds `-p orb-player -p orb-worklet` and `-p orb-web-demo` for wasm32.
 
+## The web page (task-172)
+
+OpenRB-338 runs in the browser as a static page: orb-ui's window on eframe's web runner, its
+audio in the AudioWorklet of "The web player" above. What it does differently from the desktop
+app is in `docs/ui_spec.md` section 26, how it is put together in `docs/web.md` section 7.
+
+    scripts/build-web.sh             # writes dist/web/
+    scripts/build-web.sh --serve     # then serves it at http://localhost:8338/OpenRB-338/web/
+
+- **Tools.** The pinned toolchain with its `wasm32-unknown-unknown` target
+  (`rust-toolchain.toml`) and **wasm-bindgen-cli 0.2.129**, the one of "The web player" (`cargo
+  install wasm-bindgen-cli --version 0.2.129 --locked`; the script checks the version). No
+  trunk and no wasm-opt: the script runs two cargo builds and wasm-bindgen, nothing else.
+- **What it writes.** `dist/web/` (ignored by git, as all of `dist/`): `index.html` (from
+  `crates/orb-web/index.html`), `favicon.ico` (`assets/app_icon.ico`), `orb_worklet.wasm` (the
+  worklet's module) and `pkg/orb_web.js` + `pkg/orb_web_bg.wasm` (the page's module, through
+  `wasm-bindgen --target web`). Every URL in the page is relative, so the folder works from any
+  path: GitHub Pages serves the project site under `/OpenRB-338/`, and the deploy (task-175) puts
+  the page under `/OpenRB-338/web/`. `--serve [PORT]` serves it under that same sub-path (a
+  folder of links in `target/web-serve/`, `python3 -m http.server`, default port 8338).
+- **The crates.** `crates/orb-web` is the page's module (a cdylib, empty off wasm32): it calls
+  `orb_ui::web::start`. orb-ui builds for wasm32 with its feature `app` (eframe with its default
+  features: wgpu with WebGPU, falling back to WebGL2); on wasm32 it takes orb-player with the
+  feature `web`, `wasm-bindgen`, `wasm-bindgen-futures`, `js-sys`, `web-sys` (pinned as
+  orb-player's) and `web-time` 1.1.0 (std's `Instant` panics on wasm32-unknown-unknown), and it
+  does not take rfd or arboard. orb-cli's library builds for wasm32 without its default
+  features `cli` (clap, claxon, ctrlc: the `orb` binary needs them, `required-features`) and
+  `ogg` (vorbis_rs, libvorbis in C, which does not build for wasm32-unknown-unknown); orb-ui
+  takes it with `ogg` natively and without on wasm32, so the native app keeps Ogg export.
+- **Version.** The About box shows the version and commit of orb-ui's build script, as
+  natively (`SOURCE_DATE_EPOCH` and `ORB_BUILD_BRANCH` apply the same way).
+- **Sizes (2026-11-27).** `orb_web_bg.wasm` 19.0 MB (9.2 MB gzipped; the embedded panel art,
+  the built-in kit and the fonts; its name section, 2.4 MB, is kept so the console's panic stacks
+  name the functions), `orb_web.js` 167 KB, `orb_worklet.wasm` 320 KB. The release build of the
+  page's module takes about 1.5 minutes here.
+- **Checks.** `cargo clippy --target wasm32-unknown-unknown -p orb-web --all-targets -- -D
+  warnings` lints the code under `cfg(target_arch = "wasm32")` that the native clippy does not
+  see; the CI job `wasm` runs it and builds `-p orb-web`.
+
 ## GitHub Actions (`.github/workflows/`)
 
 Decisions of the user (2026-10-28): the cost of six release package jobs and the three-OS CI
@@ -573,7 +613,7 @@ Actions are pinned to a commit SHA (the version in a comment). No workflow uses 
     plugin installer's preinstall script; see "The plugin").
   - `wasm32 build and wasm-vs-native renders` (task-169) on `ubuntu-latest`: `cargo build
     --locked --target wasm32-unknown-unknown -p orb-engine -p rbs -p rbm`, the web player's
-    crates (task-171: `-p orb-player -p orb-worklet`, then `-p orb-web-demo`), then
+    crates (task-171: `-p orb-player -p orb-worklet`, then `-p orb-web-demo`), the web page (task-172: `-p orb-web`, and its wasm32 clippy), then
     `scripts/wasm-check.sh` on the sets that need no external input (see "The wasm build").
 - `release.yml`, on a tag `v*` and by hand:
   - `prepare` computes one `SOURCE_DATE_EPOCH` and one `ORB_BUILD_BRANCH` (`scripts/release-env.sh`)

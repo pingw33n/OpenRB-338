@@ -23,7 +23,8 @@ pub struct Opened {
 
 /// Reads and converts an `.rbs` song, keeping the file's `rbs` song.
 pub fn open_song(path: &Path) -> Result<Opened, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{}: cannot read: {e}", path.display()))?;
+    let data =
+        orb_cli::fs::read(path).map_err(|e| format!("{}: cannot read: {e}", path.display()))?;
     open_bytes(&data, &path.display().to_string())
 }
 
@@ -60,7 +61,7 @@ pub const DEMO: &str = "Demo.rbs";
 
 /// Whether the mod file has an embedded `Demo.rbs`; false for a file that is no mod.
 pub fn mod_has_demo(path: &Path) -> bool {
-    std::fs::read(path)
+    orb_cli::fs::read(path)
         .ok()
         .and_then(|b| rbm::Rbm::parse(b).ok())
         .is_some_and(|r| r.find(DEMO).is_some())
@@ -78,7 +79,8 @@ pub const SPLASH: &str = "splash.jpg";
 /// The bytes of the embedded file `name` (case-insensitive, the first) of a recrypted mod. An
 /// error says why there are none (no such file, not a mod, not recrypted).
 pub fn mod_file(path: &Path, name: &str) -> Result<Vec<u8>, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: cannot read: {e}", path.display()))?;
+    let bytes =
+        orb_cli::fs::read(path).map_err(|e| format!("{}: cannot read: {e}", path.display()))?;
     let rbm = rbm::Rbm::parse(bytes).map_err(|e| format!("{}: not a mod: {e}", path.display()))?;
     if rbm.find(name).is_none() {
         return Err(format!("{}: the mod has no {name}", path.display()));
@@ -102,7 +104,12 @@ pub fn load_song(path: &Path) -> Result<Song, String> {
 
 /// The INFO chunk of a mod file (its menu name and URLs).
 pub fn mod_info(path: &Path) -> Result<rbm::Info, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: cannot read: {e}", path.display()))?;
+    // a mod of the web's picked folder not read yet: its INFO was read alone
+    if let Some(info) = orb_cli::fs::lazy_info(path) {
+        return info.ok_or_else(|| format!("{}: not a mod with an INFO chunk", path.display()));
+    }
+    let bytes =
+        orb_cli::fs::read(path).map_err(|e| format!("{}: cannot read: {e}", path.display()))?;
     let rbm = rbm::Rbm::parse(bytes).map_err(|e| format!("{}: not a mod: {e}", path.display()))?;
     rbm.info()
         .cloned()
@@ -150,8 +157,8 @@ impl ModDetails {
                 None,
             ),
             orb_cli::mods::Kit::Mod(p) => {
-                let bytes =
-                    std::fs::read(p).map_err(|e| format!("{}: cannot read: {e}", p.display()))?;
+                let bytes = orb_cli::fs::read(p)
+                    .map_err(|e| format!("{}: cannot read: {e}", p.display()))?;
                 let name = p.file_name().map_or_else(
                     || p.display().to_string(),
                     |n| n.to_string_lossy().into_owned(),
@@ -194,10 +201,10 @@ pub fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, bytes)
-        .and_then(|()| std::fs::rename(&tmp, path))
+    orb_cli::fs::write(&tmp, bytes)
+        .and_then(|()| orb_cli::fs::rename(&tmp, path))
         .map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
+            let _ = orb_cli::fs::remove_file(&tmp);
             format!("{}: cannot write: {e}", path.display())
         })
 }

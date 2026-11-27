@@ -43,7 +43,7 @@ pub fn load_song(input: &Path) -> Result<Song, Fail> {
 
 /// [`load_song`] that also keeps the parsed file (for `orb info`); the messages are render's.
 pub fn read_song(input: &Path) -> Result<Loaded, Fail> {
-    let data = std::fs::read(input)
+    let data = crate::fs::read(input)
         .map_err(|e| fail(1, format!("{}: cannot read the song: {e}", input.display())))?;
     if rbs::rb1x::is_1x(&data) {
         // a ReBirth 1.x song: a MIDI file, imported as Rebirth.exe does (docs/song_load.md 12)
@@ -122,7 +122,7 @@ pub fn drums_playing(song: &Song) -> Vec<&'static str> {
 
 /// Reads and parses an `.rbm` file.
 pub fn read_mod(path: &Path) -> Result<rbm::Rbm, Fail> {
-    let bytes = std::fs::read(path)
+    let bytes = crate::fs::read(path)
         .map_err(|e| fail(1, format!("{}: cannot read the mod: {e}", path.display())))?;
     rbm::Rbm::parse(bytes).map_err(|e| fail(1, format!("{}: {e}", path.display())))
 }
@@ -226,7 +226,7 @@ impl Renderer {
         let samples = self.render(label, song, idle_blocks)?;
         let bytes = encode::encode(format, &samples, quality)
             .map_err(|e| fail(1, format!("encoding failed: {e}")))?;
-        std::fs::write(output, bytes)
+        crate::fs::write(output, &bytes)
             .map_err(|e| fail(1, format!("{}: cannot write: {e}", output.display())))
     }
 }

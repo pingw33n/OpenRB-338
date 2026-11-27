@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# OpenRB-338 as a web page (task-172, docs/web.md section 7, docs/building.md "The web page"):
+# builds the AudioWorklet's module (crates/orb-worklet) and the page's module (crates/orb-web,
+# orb-ui on eframe's web runner, through wasm-bindgen) for wasm32-unknown-unknown in release,
+# and writes the static site to dist/web/:
+#
+#   index.html  favicon.ico  orb_worklet.wasm  pkg/orb_web.js  pkg/orb_web_bg.wasm
+#
+# Every URL in it is relative, so it can be served from any path (GitHub Pages serves the
+# project site under /OpenRB-338/). With --serve it then serves dist/web/ at
+# http://localhost:PORT/OpenRB-338/web/ (default port 8338) until interrupted, through a folder
+# of links that puts the site under that sub-path.
+#
+#   scripts/build-web.sh [--serve [PORT]]
+#
+# Needs the pinned toolchain's wasm32-unknown-unknown target (rust-toolchain.toml) and
+# wasm-bindgen-cli of the lockfile's wasm-bindgen version (0.2.129):
+#   cargo install wasm-bindgen-cli --version 0.2.129 --locked
+# The version and commit of the About box come from orb-ui's build script, as natively
+# (SOURCE_DATE_EPOCH and ORB_BUILD_BRANCH apply).
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+target="${CARGO_TARGET_DIR:-$root/target}"
+out="$root/dist/web"
+want=0.2.129
+
+if ! have="$(wasm-bindgen --version 2>/dev/null)"; then
+    echo "wasm-bindgen not found: cargo install wasm-bindgen-cli --version $want --locked" >&2
+    exit 1
+fi
+if [[ "$have" != "wasm-bindgen $want" ]]; then
+    echo "$have, but the lockfile has $want: cargo install wasm-bindgen-cli --version $want --locked" >&2
+    exit 1
+fi
+
+cd "$root"
+# two builds: one with the page's module would put orb-player's feature `web` (wasm-bindgen)
+# into the worklet's module too (features are unified within a build)
+cargo build --locked --release --target wasm32-unknown-unknown -p orb-worklet
+cargo build --locked --release --target wasm32-unknown-unknown -p orb-web
+
+wasm="$target/wasm32-unknown-unknown/release"
+rm -rf "$out"
+mkdir -p "$out"
+cp "$wasm/orb_worklet.wasm" "$out/"
+wasm-bindgen --target web --no-typescript --out-dir "$out/pkg" "$wasm/orb_web.wasm"
+cp crates/orb-web/index.html "$out/"
+cp assets/app_icon.ico "$out/favicon.ico"
+echo "built $out:"
+(cd "$out" && find . -type f | sort | while read -r f; do
+    printf '  %-24s %8d bytes\n' "${f#./}" "$(wc -c < "$f")"
+done)
+
+if [[ "${1:-}" == "--serve" ]]; then
+    port="${2:-8338}"
+    serve="$target/web-serve"
+    rm -rf "$serve"
+    mkdir -p "$serve/OpenRB-338"
+    ln -s "$out" "$serve/OpenRB-338/web"
+    echo "serving http://localhost:$port/OpenRB-338/web/ (Ctrl-C stops)"
+    exec python3 -m http.server --bind 127.0.0.1 --directory "$serve" "$port"
+fi

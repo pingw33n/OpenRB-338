@@ -59,3 +59,45 @@ fn silence_matches_its_reference() {
         .collect();
     assert_eq!(hash, e["wav_sha256"].as_str().unwrap());
 }
+
+/// The export in steps (`export::Export`, the web build's export, task-172) makes the same
+/// calls as the one-shot export: a shipped song with the built-in kit (Calm), stepped one call and
+/// seven calls at a time, equals `export_song` and its reference's sha256; the steps count up to
+/// the total (the 9088 idle blocks' 568 calls, then the chunks).
+#[test]
+fn the_export_in_steps_equals_the_whole_export() {
+    let m = manifest();
+    let e = &m["shipped"]["Calm"];
+    let s = song(e);
+    let idle = e["idle_blocks"].as_u64().unwrap() as u32;
+    let engine = || {
+        Engine::new(
+            Arc::new(Tables::new()),
+            Devices::implemented(Some(rbm::standard::builtin_samples())),
+        )
+    };
+    let whole = export::export_song(&mut engine(), &s, idle).unwrap();
+    for per in [1, 7] {
+        let mut eng = engine();
+        let mut x = export::export_song_steps(&mut eng, &s, idle).unwrap();
+        let total = x.total();
+        assert_eq!(
+            total,
+            (idle as usize).div_ceil(16) + export::chunk_sizes(ExportRange::from(&s.globals)).len()
+        );
+        let mut steps = 0;
+        while !x.step(&mut eng, per) {
+            steps += 1;
+            assert!(x.done() < total);
+        }
+        assert_eq!(x.done(), total);
+        assert_eq!(steps, total.div_ceil(per) - 1, "per {per}");
+        let samples = x.into_samples();
+        assert!(samples == whole, "per {per}");
+    }
+    let hash: String = Sha256::digest(export::wav_bytes(&whole))
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(hash, e["wav_sha256"].as_str().unwrap());
+}

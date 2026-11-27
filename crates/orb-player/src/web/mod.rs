@@ -177,8 +177,15 @@ impl WebOutput {
                 let _ = c.resume();
             }
         });
+        // In the capture phase: a page's own handlers may stop the events (eframe stops the
+        // canvas's pointer and key events), and a listener of the bubbling phase on the document
+        // would then never hear the gesture (task-172: Play did nothing in Brave)
         for ev in GESTURES.into_iter().chain(["visibilitychange"]) {
-            document.add_event_listener_with_callback(ev, resume.as_ref().unchecked_ref())?;
+            document.add_event_listener_with_callback_and_bool(
+                ev,
+                resume.as_ref().unchecked_ref(),
+                true,
+            )?;
         }
         Ok(WebOutput {
             id,
@@ -215,8 +222,11 @@ impl Drop for WebOutput {
     fn drop(&mut self) {
         if let Some(d) = web_sys::window().and_then(|w| w.document()) {
             for ev in GESTURES.into_iter().chain(["visibilitychange"]) {
-                let _ =
-                    d.remove_event_listener_with_callback(ev, self.resume.as_ref().unchecked_ref());
+                let _ = d.remove_event_listener_with_callback_and_bool(
+                    ev,
+                    self.resume.as_ref().unchecked_ref(),
+                    true,
+                );
             }
         }
         let _ = self.node.disconnect();

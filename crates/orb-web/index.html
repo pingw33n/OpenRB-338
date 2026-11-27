@@ -1,0 +1,118 @@
+<!doctype html>
+<!-- OpenRB-338 as a web page (task-172, docs/web.md section 7). scripts/build-web.sh copies it
+     to dist/web/. Every URL is relative, so the page works from any sub-path. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenRB-338</title>
+<link rel="icon" href="favicon.ico">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1b1b; }
+  #orb-canvas { display: block; width: 100%; height: 100%; }
+  /* The loading screen: opaque, above the canvas, takes every click until the app hides it
+     (orb_ui::web, once the panel is drawn whole). */
+  #orb-loading {
+    position: absolute; inset: 0; z-index: 10; background: #1b1b1b;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; color: #b8d8c0; font: 14px system-ui, sans-serif; cursor: progress;
+  }
+  #orb-loading-title { font-size: 22px; letter-spacing: 0.08em; color: #e6e6e6; }
+  #orb-loading-track { width: 260px; height: 6px; background: #333; border-radius: 3px; }
+  #orb-loading-bar { width: 0%; height: 100%; background: #f0a030; border-radius: 3px; }
+  #orb-error {
+    display: none; position: absolute; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.6);
+    align-items: center; justify-content: center;
+  }
+  #orb-error.shown { display: flex; }
+  #orb-error > div {
+    max-width: 36em; background: #2b2b2b; color: #e6e6e6; border: 1px solid #555;
+    border-radius: 6px; padding: 1.2em 1.4em; font: 14px system-ui, sans-serif;
+  }
+  #orb-error h1 { font-size: 15px; margin: 0 0 0.8em; }
+  #orb-error-text { white-space: pre-wrap; margin: 0 0 1em; }
+  #orb-error button { font: inherit; padding: 0.3em 1.2em; }
+</style>
+</head>
+<body>
+<canvas id="orb-canvas"></canvas>
+<div id="orb-loading">
+  <div id="orb-loading-title">OpenRB-338</div>
+  <div id="orb-loading-track"><div id="orb-loading-bar"></div></div>
+  <div id="orb-loading-text">Loading...</div>
+</div>
+<div id="orb-error" role="alertdialog" aria-labelledby="orb-error-title">
+  <div>
+    <h1 id="orb-error-title">OpenRB-338</h1>
+    <p id="orb-error-text"></p>
+    <button id="orb-error-reload">Reload</button>
+  </div>
+</div>
+<script type="module">
+import init, { start, state, suspend_audio } from "./pkg/orb_web.js";
+// the state the last frame saw, for checks from the console (docs/web.md section 7)
+window.orbState = () => JSON.parse(state());
+window.orbSuspendAudio = suspend_audio;
+
+const $ = (id) => document.getElementById(id);
+const showError = (text) => {
+  $("orb-error-text").textContent = text;
+  $("orb-error").classList.add("shown");
+};
+$("orb-error-reload").onclick = () => location.reload();
+const progress = (text, fraction) => {
+  $("orb-loading-text").textContent =
+    fraction == null ? text + "..." : `${text}... ${Math.round(fraction * 100)}%`;
+  $("orb-loading-bar").style.width = fraction == null ? "0%" : `${fraction * 100}%`;
+};
+
+// The app's Ctrl/Cmd shortcuts the browser would act on (eframe already keeps O and S, and the
+// copy, cut and paste keys are the browser's clipboard events). Ctrl/Cmd+N, W, T and Q stay
+// the browser's: a page cannot take them (docs/ui_spec.md section 26).
+const KEYS = new Set(["d", "e", "f", "g", "i", "l", "z"]);
+window.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && KEYS.has(e.key.toLowerCase())) {
+    e.preventDefault();
+  }
+}, { capture: true });
+
+// The page's module, fetched with its progress shown (it is the bulk of the download).
+async function fetchModule(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: ${r.status} ${r.statusText}`);
+  const total = Number(r.headers.get("content-length")) || 0;
+  if (!r.body || !total) {
+    progress("Downloading");
+    return await r.arrayBuffer();
+  }
+  // (a compressed response's content-length is the compressed size: the share is a guess then)
+  const reader = r.body.getReader();
+  const chunks = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    progress("Downloading", Math.min(1, got / total));
+  }
+  const bytes = new Uint8Array(got);
+  let at = 0;
+  for (const c of chunks) { bytes.set(c, at); at += c.length; }
+  return bytes;
+}
+
+try {
+  const wasm = await fetchModule(new URL("pkg/orb_web_bg.wasm", import.meta.url));
+  progress("Starting");
+  await init({ module_or_path: wasm });
+  // the app shows its own steps from here and removes the loading screen when it is drawn
+  await start($("orb-canvas"), new URL("orb_worklet.wasm", import.meta.url).href);
+} catch (e) {
+  console.error(e);
+  $("orb-loading")?.remove();
+  showError("OpenRB-338 could not start: " + e);
+}
+</script>
+</body>
+</html>

@@ -270,6 +270,26 @@ pub struct Info {
     pub version: Option<(u8, u8, u8)>,
 }
 
+/// The size of the `INFO` chunk's body that [`Rbm::parse`] reads (another size is ignored).
+pub const INFO_SIZE: usize = 1280;
+
+impl Info {
+    /// The fields of an `INFO` chunk's body ([`INFO_SIZE`] bytes; `None` for another size).
+    pub fn from_body(b: &[u8]) -> Option<Info> {
+        if b.len() != INFO_SIZE {
+            return None;
+        }
+        let version = (b[1073] == 0xBC).then(|| (b[1074], b[1075], b[1076]));
+        Some(Info {
+            text: cstr_latin1(&b[0..600]),
+            ftp: cstr_latin1(&b[601..801]),
+            web: cstr_latin1(&b[802..1002]),
+            name: cstr_latin1(&b[1003..1067]),
+            version,
+        })
+    }
+}
+
 /// A parsed mod. The file bytes are kept; embedded files are descrambled on request.
 #[derive(Debug, Clone)]
 pub struct Rbm {
@@ -288,70 +308,241 @@ fn be32(b: &[u8], at: usize) -> u32 {
     u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
 
-impl Rbm {
-    /// Parses the container. A CAT type other than `PRBM` is accepted, as the original does,
-    /// with a warning in [`Rbm::warnings`].
-    pub fn parse(data: Vec<u8>) -> Result<Rbm, RbmError> {
-        if data.len() < 12 || &data[..4] != b"CAT " {
-            return Err(fmt_err("not an IFF CAT"));
+/// The bytes a [`Walk`] needs next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Want {
+    /// `len` bytes at the file offset `at` (all of them: the walk asks only within the file).
+    Bytes { at: usize, len: usize },
+    /// The walk is over: [`Walk::finish`] gives its result.
+    Done,
+}
+
+/// How many bytes of an `EMBF` body a [`Walk`] asks for at a time while it looks for the end of
+/// the embedded file's name.
+const NAME_STEP: usize = 256;
+
+#[derive(Debug)]
+enum Step {
+    Head,
+    Chunk,
+    /// An `EMBF` body from `from` on, looking for the NUL that ends the name (`got` so far).
+    Name {
+        at: usize,
+        from: usize,
+        end: usize,
+        got: Vec<u8>,
+        chunk: Chunk,
+    },
+    /// A 1280-byte `INFO` body.
+    Info {
+        end: usize,
+        chunk: Chunk,
+    },
+    Failed,
+}
+
+/// The checks and the chunk list of [`Rbm::parse`] for a file of `size` bytes, as a machine that
+/// asks for the bytes it needs ([`Walk::want`]) and is given them ([`Walk::feed`]): the CAT
+/// header, every chunk header (an overrun fails), the name of every `EMBF` (its NUL-terminated
+/// start), every 1280-byte `INFO` body, and no trailing bytes. [`Rbm::parse`] runs it over the
+/// whole file; the web build runs it over a picked file's slices, so a mods folder is checked
+/// without reading the samples (task-172), and both give the same result.
+#[derive(Debug)]
+pub struct Walk {
+    size: usize,
+    pos: usize,
+    step: Step,
+    chunks: Vec<Chunk>,
+    info: Option<Info>,
+    warnings: Vec<String>,
+}
+
+/// What a finished [`Walk`] found.
+#[derive(Debug, Clone)]
+pub struct Walked {
+    pub chunks: Vec<Chunk>,
+    pub info: Option<Info>,
+    pub warnings: Vec<String>,
+}
+
+impl Walk {
+    pub fn new(size: usize) -> Walk {
+        Walk {
+            size,
+            pos: 12,
+            step: Step::Head,
+            chunks: Vec::new(),
+            info: None,
+            warnings: Vec::new(),
         }
-        let size = be32(&data, 4) as usize;
-        if size.checked_add(8) != Some(data.len()) {
-            return Err(fmt_err(format!(
-                "CAT size {size} does not match the file ({} bytes)",
-                data.len()
-            )));
+    }
+
+    /// The bytes to give [`Walk::feed`] next.
+    pub fn want(&self) -> Want {
+        match &self.step {
+            Step::Head => Want::Bytes {
+                at: 0,
+                len: self.size.min(12),
+            },
+            Step::Chunk if self.pos + 8 <= self.size => Want::Bytes {
+                at: self.pos,
+                len: 8,
+            },
+            Step::Chunk | Step::Failed => Want::Done,
+            Step::Name { from, end, .. } => Want::Bytes {
+                at: *from,
+                len: (end - from).min(NAME_STEP),
+            },
+            Step::Info { end, .. } => Want::Bytes {
+                at: end - INFO_SIZE,
+                len: INFO_SIZE,
+            },
         }
-        let mut warnings = Vec::new();
-        if &data[8..12] != b"PRBM" {
-            warnings.push(format!(
-                "CAT type {:?} is not PRBM",
-                String::from_utf8_lossy(&data[8..12])
-            ));
+    }
+
+    /// Takes the bytes [`Walk::want`] asked for; an error ends the walk.
+    pub fn feed(&mut self, b: &[u8]) -> Result<(), RbmError> {
+        let want = match self.want() {
+            Want::Bytes { len, .. } => len,
+            Want::Done => return Err(fmt_err("the walk is over")),
+        };
+        if b.len() != want {
+            return Err(fmt_err(format!("{} bytes given for {want}", b.len())));
         }
-        let mut chunks = Vec::new();
-        let mut info = None;
-        let (mut pos, end) = (12usize, data.len());
-        while pos + 8 <= end {
-            let tag = [data[pos], data[pos + 1], data[pos + 2], data[pos + 3]];
-            let csize = be32(&data, pos + 4) as usize;
-            let body = pos + 8;
-            let body_end = body
-                .checked_add(csize)
-                .filter(|&e| e <= end)
-                .ok_or_else(|| fmt_err(format!("chunk at {pos} overruns the file")))?;
-            let mut c = Chunk {
-                ordinal: chunks.len(),
-                tag,
-                offset: body,
-                size: csize,
-                name: None,
-                name_len: 0,
-            };
-            if &tag == b"EMBF" {
-                let nul = data[body..body_end]
-                    .iter()
-                    .position(|&b| b == 0)
-                    .ok_or_else(|| fmt_err(format!("EMBF at {pos} has no file name")))?;
-                c.name = Some(data[body..body + nul].iter().map(|&b| b as char).collect());
-                c.name_len = nul + 1;
-            } else if &tag == b"INFO" && csize == 1280 {
-                let b = &data[body..body_end];
-                let version = (b[1073] == 0xBC).then(|| (b[1074], b[1075], b[1076]));
-                info = Some(Info {
-                    text: cstr_latin1(&b[0..600]),
-                    ftp: cstr_latin1(&b[601..801]),
-                    web: cstr_latin1(&b[802..1002]),
-                    name: cstr_latin1(&b[1003..1067]),
-                    version,
-                });
+        let step = std::mem::replace(&mut self.step, Step::Failed);
+        self.step = self.next(step, b)?;
+        Ok(())
+    }
+
+    fn next(&mut self, step: Step, b: &[u8]) -> Result<Step, RbmError> {
+        match step {
+            Step::Head => {
+                if b.len() < 12 || &b[..4] != b"CAT " {
+                    return Err(fmt_err("not an IFF CAT"));
+                }
+                let size = be32(b, 4) as usize;
+                if size.checked_add(8) != Some(self.size) {
+                    return Err(fmt_err(format!(
+                        "CAT size {size} does not match the file ({} bytes)",
+                        self.size
+                    )));
+                }
+                if &b[8..12] != b"PRBM" {
+                    self.warnings.push(format!(
+                        "CAT type {:?} is not PRBM",
+                        String::from_utf8_lossy(&b[8..12])
+                    ));
+                }
+                Ok(Step::Chunk)
             }
-            chunks.push(c);
-            pos = body_end + (csize & 1);
+            Step::Chunk => {
+                let pos = self.pos;
+                let tag = [b[0], b[1], b[2], b[3]];
+                let csize = be32(b, 4) as usize;
+                let body = pos + 8;
+                let end = body
+                    .checked_add(csize)
+                    .filter(|&e| e <= self.size)
+                    .ok_or_else(|| fmt_err(format!("chunk at {pos} overruns the file")))?;
+                let chunk = Chunk {
+                    ordinal: self.chunks.len(),
+                    tag,
+                    offset: body,
+                    size: csize,
+                    name: None,
+                    name_len: 0,
+                };
+                if &tag == b"EMBF" {
+                    if csize == 0 {
+                        return Err(fmt_err(format!("EMBF at {pos} has no file name")));
+                    }
+                    return Ok(Step::Name {
+                        at: pos,
+                        from: body,
+                        end,
+                        got: Vec::new(),
+                        chunk,
+                    });
+                }
+                if &tag == b"INFO" && csize == INFO_SIZE {
+                    return Ok(Step::Info { end, chunk });
+                }
+                Ok(self.done(chunk))
+            }
+            Step::Name {
+                at,
+                from,
+                end,
+                mut got,
+                mut chunk,
+            } => match b.iter().position(|&c| c == 0) {
+                Some(nul) => {
+                    got.extend_from_slice(&b[..nul]);
+                    chunk.name_len = got.len() + 1;
+                    chunk.name = Some(got.iter().map(|&c| c as char).collect());
+                    Ok(self.done(chunk))
+                }
+                None if from + b.len() >= end => {
+                    Err(fmt_err(format!("EMBF at {at} has no file name")))
+                }
+                None => {
+                    got.extend_from_slice(b);
+                    Ok(Step::Name {
+                        at,
+                        from: from + b.len(),
+                        end,
+                        got,
+                        chunk,
+                    })
+                }
+            },
+            Step::Info { chunk, .. } => {
+                self.info = Info::from_body(b);
+                Ok(self.done(chunk))
+            }
+            Step::Failed => Err(fmt_err("the walk failed")),
         }
-        if pos != end {
-            return Err(fmt_err(format!("trailing bytes at {pos}")));
+    }
+
+    /// Notes `chunk` and goes on after it (an odd size is padded to an even offset).
+    fn done(&mut self, chunk: Chunk) -> Step {
+        self.pos = chunk.offset + chunk.size + (chunk.size & 1);
+        self.chunks.push(chunk);
+        Step::Chunk
+    }
+
+    /// The result once [`Walk::want`] is [`Want::Done`]: the trailing bytes check.
+    pub fn finish(self) -> Result<Walked, RbmError> {
+        match self.step {
+            Step::Chunk if self.pos == self.size => Ok(Walked {
+                chunks: self.chunks,
+                info: self.info,
+                warnings: self.warnings,
+            }),
+            Step::Chunk => Err(fmt_err(format!("trailing bytes at {}", self.pos))),
+            _ => Err(fmt_err("the walk is not over")),
         }
+    }
+
+    /// Runs the walk over `data`, the whole file.
+    pub fn run(data: &[u8]) -> Result<Walked, RbmError> {
+        let mut w = Walk::new(data.len());
+        while let Want::Bytes { at, len } = w.want() {
+            w.feed(&data[at..at + len])?;
+        }
+        w.finish()
+    }
+}
+
+impl Rbm {
+    /// Parses the container ([`Walk`]). A CAT type other than `PRBM` is accepted, as the
+    /// original does, with a warning in [`Rbm::warnings`].
+    pub fn parse(data: Vec<u8>) -> Result<Rbm, RbmError> {
+        let Walked {
+            chunks,
+            info,
+            warnings,
+        } = Walk::run(&data)?;
         Ok(Rbm {
             data,
             chunks,

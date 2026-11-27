@@ -29,7 +29,12 @@ impl Clipboard {
     /// The clipboard's text; `None` when it holds no text or cannot be read.
     pub fn read(&self) -> Option<String> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Clipboard::System => arboard::Clipboard::new().ok()?.get_text().ok(),
+            // a page reads the clipboard only from a paste event (Ctrl/Cmd+V), which egui turns
+            // into its Paste event; the web build uses a memory clipboard (`orb_ui::web`)
+            #[cfg(target_arch = "wasm32")]
+            Clipboard::System => None,
             Clipboard::Memory(m) => m.lock().ok()?.clone(),
         }
     }

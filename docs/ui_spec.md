@@ -2760,3 +2760,56 @@ Linux).
 
 **Keyboard Shortcuts** (section 18, Help): no group for this editor (the user's cut of
 task-284), as for the 808's.
+
+## 26. The web version (task-172)
+
+The same window runs in a browser page (`scripts/build-web.sh`, `docs/building.md` "The web
+page"; how it works: `docs/web.md` section 7). The panel, the skins, the menu, the windows and
+the keyboard are the standalone app's. What differs:
+
+- **Loading.** Until the panel is drawn whole, a loading screen covers the page: the download
+  of the program with its progress, then the start of the audio and the drawing of the panel
+  with its share done. The menu and the panel take no input before. The same screen ("Drawing
+  the panel... N%") covers the page whenever a skin is drawn for the first time (View > Modern
+  after a start in Classic, or after its parts were dropped), until it is whole; a resize draws
+  the parts from their last size until the new one is ready. The page never shows a half-drawn
+  panel.
+- **Files.** A page sees no folders of the computer. File > **Open Local...** (and Ctrl/Cmd+O)
+  and Mods > Choose file... open the browser's own file picker (no in-app browser for local
+  files on the web). The Mods menu has **Choose Mods Folder...** (the browser's folder picker):
+  the folder's `.rbm` files are the Mods folder for the session, found by their INFO names with
+  the native rules (`orb_cli::mods::scan`). When the folder is picked, each mod is checked as
+  natively but without reading its samples: its chunk headers, names and INFO only (326 mods,
+  1 GB: 3.5 s, with "Reading the mods folder NAME ... K of N" in the status line; the page's
+  memory stays at about 30 MB). A mod is read whole when a song or the Mods menu uses it
+  ("Reading NAME ..." in the status line). A song (`.rbs`) dropped onto the page opens; mods
+  (`.rbm`) dropped onto it join the Mods folder. The files are kept in memory
+  until the page is closed or reloaded; the settings remember the Mods folder's name, but it is
+  empty after a reload until it is picked again.
+- **Save and Export** have no in-app save dialog on the web (the user's decision of
+  2026-11-27). Save As, and Save of a song that was not saved in this page yet, ask the
+  browser: where it has its own save picker (`showSaveFilePicker`: Chrome, Edge, Opera, Brave
+  and the other Chromium browsers; the user's Brave on macOS opened it), the picker opens with
+  the song's name, and later Saves of that song write to the chosen file without asking (a
+  song opened or made since goes through the picker again); elsewhere (Firefox,
+  Safari) the song is downloaded named after the song (`Untitled.rbs` for a new one), and
+  each Save downloads it again. Closing the picker without a choice saves nothing. File >
+  Export Loop as Audio File... works the same way for `SONG.flac`: the web exports **FLAC
+  only** (no format choice; this narrows task-170's WAV and FLAC). The export runs on the
+  page's thread in slices, the status line shows "Exporting NAME ... N%" then "Encoding NAME
+  ... N%", then "Exported NAME" ("(downloaded)" for a download), and the music keeps
+  playing.
+- **Options > Audio Output...** is absent: the page plays through the browser's output, at
+  44100 Hz in an AudioWorklet. The browser starts the sound at the first click or key press.
+- **Closing.** There is no Quit and no unsaved-changes prompt of the app's own: while the song
+  has unsaved changes the browser asks before the page is closed or reloaded (its own question).
+- **Shortcuts.** The page takes Ctrl/Cmd+O, S, I, Z, D, E, F, G and L from the browser while it
+  has the focus. Ctrl/Cmd+N (File > New), W, T and Q stay the browser's: a page cannot take them,
+  so File > New is a menu click there. Copy, Cut and Paste are the browser's clipboard events;
+  Edit > Paste Pattern and the pattern editors' Paste read the page's own copy (a page cannot
+  read the clipboard unasked), so they paste what was copied in the page.
+- **Settings** are kept in the browser's `localStorage` (the same keys as the settings file),
+  per site.
+- **A crash** shows the page's error box with the message and a Reload button, and logs the
+  message and the stack to the browser's console; there is no crash log file.
+- The title of the browser tab is the window's title.

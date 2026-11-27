@@ -1,0 +1,17 @@
+[package]
+name = "orb-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "OpenRB-338 as a web page (task-172): orb-ui's window on eframe's web runner"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Everything is wasm32 only (the crate is empty elsewhere); scripts/build-web.sh builds it.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+orb-ui = { path = "../orb-ui" }
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "=0.4.79"
+web-sys = { version = "=0.3.106", features = ["HtmlCanvasElement"] }

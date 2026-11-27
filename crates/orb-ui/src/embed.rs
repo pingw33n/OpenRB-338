@@ -446,6 +446,7 @@ impl App {
             Some(o) => (o.source, o.facts_1x),
             None => (rbs::Song::empty(), None),
         };
+        self.doc_serial += 1;
         self.doc = Document {
             source,
             facts_1x,

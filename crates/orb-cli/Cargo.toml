@@ -12,6 +12,15 @@ path = "src/lib.rs"
 [[bin]]
 name = "orb"
 path = "src/main.rs"
+required-features = ["cli"]
+
+# `cli`: the `orb` binary's own dependencies; `ogg`: the Ogg Vorbis encoder (libvorbis, C, which
+# does not build for wasm32-unknown-unknown). Both are default. The UI's web build (task-172)
+# takes the library without them, and `encode` refuses Ogg there.
+[features]
+default = ["cli", "ogg"]
+cli = ["ogg", "dep:clap", "dep:claxon", "dep:ctrlc"]
+ogg = ["dep:vorbis_rs"]
 
 [dependencies]
 rbs = { path = "../rbs" }
@@ -19,15 +28,15 @@ orb-engine = { path = "../orb-engine" }
 rbm = { path = "../rbm" }
 # orb play.
 orb-player = { path = "../orb-player" }
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"], optional = true }
 flacenc = "0.5.1"
-vorbis_rs = "0.5.6"
+vorbis_rs = { version = "0.5.6", optional = true }
 # orb compare: the FLAC references, the manifest and the WAVs' sha256.
-claxon = "0.4.3"
+claxon = { version = "0.4.3", optional = true }
 serde_json = "1.0.154"
 sha2 = "0.10"
 cab = "=0.6.0"
-ctrlc = "3.5.2"
+ctrlc = { version = "3.5.2", optional = true }
 
 [dev-dependencies]
 # The gated tests' external inputs (task-121); a dev-dependency cycle (it uses orb_cli::cd).

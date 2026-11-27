@@ -30,6 +30,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use egui::{
@@ -39,7 +40,9 @@ use egui::{
 use orb_cli::encode::Format;
 use orb_cli::info::SongFacts;
 use orb_cli::mods::{self, Kit, ModOpts, STANDARD};
-use orb_cli::render::{DEFAULT_IDLE_BLOCKS, DEFAULT_QUALITY, Renderer, load_mod};
+#[cfg(not(target_arch = "wasm32"))]
+use orb_cli::render::DEFAULT_QUALITY;
+use orb_cli::render::{DEFAULT_IDLE_BLOCKS, Renderer, load_mod};
 use orb_engine::frame::LoadRefused;
 use orb_engine::samples::SampleSet;
 
@@ -52,6 +55,14 @@ use crate::palette::{INK, INK_DIM, SLATE_DARK, SLATE_LINE};
 use crate::session;
 use crate::settings::Theme;
 use crate::shortcuts;
+
+/// File > Open...: on the web "Open Local...", the browser's file picker (the user's decision of
+/// 2026-11-27; a later "Open Collection" is task-174's).
+pub const OPEN_ITEM: &str = if cfg!(target_arch = "wasm32") {
+    "Open Local..."
+} else {
+    "Open..."
+};
 
 /// The height of the menu bar in points.
 pub const MENU_H: f32 = 22.0;
@@ -99,6 +110,9 @@ pub enum Cmd {
     About,
     /// "Choose file..." of the Mods menu: the browser for a mod.
     ChooseModFile,
+    /// "Choose Mods Folder..." of the web's Mods menu (task-172): the browser's folder picker;
+    /// its mods are the Mods folder for the session ([`crate::web`]).
+    ChooseModsFolder,
     /// A kit from the Mods menu (or a mod file the browser chose).
     UseKit(Kit),
     /// A variant in the submenu of mods that share an INFO name (task-151): plays it, or when
@@ -237,10 +251,94 @@ impl ModEntry {
     }
 }
 
-/// An export that runs on its own thread.
+/// An export that runs on its own thread (on the web: in slices on the page's thread).
 pub struct Job {
+    #[cfg(not(target_arch = "wasm32"))]
     rx: Receiver<Result<(), String>>,
+    #[cfg(target_arch = "wasm32")]
+    web: WebExport,
+    /// Where the browser saves the file (the user's choice of `showSaveFilePicker`, or a
+    /// download).
+    #[cfg(target_arch = "wasm32")]
+    target: crate::web::SaveTarget,
     path: PathBuf,
+}
+
+/// The web's export (task-170: on the main thread, in slices per frame, the progress shown):
+/// the engine and the calls of `orb render`'s export ([`Renderer::render`]: a new engine with
+/// the song's kit, `export_song`), stepped by [`orb_engine::frame::export::Export`], then the
+/// FLAC encoder of `orb render`, stepped by [`orb_cli::encode::FlacSteps`]. The web exports
+/// FLAC only (the user's decision of 2026-11-27).
+#[cfg(target_arch = "wasm32")]
+pub struct WebExport {
+    engine: Box<orb_engine::frame::Engine>,
+    export: Option<orb_engine::frame::export::Export>,
+    /// The FLAC encoder once the samples are rendered.
+    flac: Option<orb_cli::encode::FlacSteps>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WebExport {
+    /// How long a frame's slice works: the page stays responsive meanwhile (the audio runs
+    /// in the worklet and is not held up).
+    const SLICE: std::time::Duration = std::time::Duration::from_millis(12);
+
+    fn start(mods: ModOpts, label: &str, song: &orb_engine::song::Song) -> Result<Self, String> {
+        let mut r = Renderer::new(mods);
+        let samples = r.samples(label, song).map_err(|orb_cli::Fail(_, m)| m)?;
+        let mut engine = Box::new(orb_engine::frame::Engine::new(
+            r.tables.clone(),
+            orb_engine::frame::Devices::implemented(samples),
+        ));
+        let export =
+            orb_engine::frame::export::export_song_steps(&mut engine, song, DEFAULT_IDLE_BLOCKS)
+                .map_err(|e| format!("{label}: {e}"))?;
+        Ok(WebExport {
+            engine,
+            export: Some(export),
+            flac: None,
+        })
+    }
+
+    /// What the status line shows: the step and its share done, in percent.
+    fn progress(&self) -> (&'static str, usize) {
+        let pc = |(d, t): (usize, usize)| d * 100 / t.max(1);
+        match (&self.export, &self.flac) {
+            (_, Some(f)) => ("Encoding", pc(f.progress())),
+            (Some(e), None) => ("Exporting", pc((e.done(), e.total()))),
+            (None, None) => ("Encoding", 0),
+        }
+    }
+
+    /// One frame's work: `None` while it goes on, else the file's bytes or the error.
+    fn slice(&mut self) -> Option<Result<Vec<u8>, String>> {
+        let t0 = web_time::Instant::now();
+        if let Some(f) = &mut self.flac {
+            while t0.elapsed() < Self::SLICE {
+                match f.step(2) {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        let f = self.flac.take()?;
+                        return Some(f.finish().map_err(|e| format!("encoding failed: {e}")));
+                    }
+                    Err(e) => return Some(Err(format!("encoding failed: {e}"))),
+                }
+            }
+            return None;
+        }
+        let x = self.export.as_mut()?;
+        while t0.elapsed() < Self::SLICE {
+            if x.step(&mut self.engine, 4) {
+                let samples = self.export.take()?.into_samples();
+                match orb_cli::encode::FlacSteps::new(&samples) {
+                    Ok(f) => self.flac = Some(f),
+                    Err(e) => return Some(Err(format!("encoding failed: {e}"))),
+                }
+                return None;
+            }
+        }
+        None
+    }
 }
 
 impl App {
@@ -250,7 +348,11 @@ impl App {
     /// folder first, then `ORB_MOD_DIR` and the default places (`ModOpts::mod_dir`).
     pub fn mod_opts(&self) -> ModOpts {
         ModOpts {
-            mod_dir: self.settings.mods_dir.clone().filter(|d| d.is_dir()),
+            mod_dir: self
+                .settings
+                .mods_dir
+                .clone()
+                .filter(|d| orb_cli::fs::is_dir(d)),
             ..ModOpts::default()
         }
     }
@@ -660,6 +762,7 @@ impl App {
             self.mod_opened();
         }
         self.settled = true;
+        self.doc_serial += 1;
         self.doc = Document {
             source,
             facts_1x,
@@ -775,8 +878,22 @@ impl App {
         ))
     }
 
-    /// Save: to the song's file, or Save As for a song that has none.
+    /// Save: to the song's file, or Save As for a song that has none. On the web: to where the
+    /// last Save As of this song went (a file handle, or a download again), else Save As.
     pub fn save(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let again = self
+                .web_target
+                .as_ref()
+                .filter(|(n, p, _)| *n == self.doc_serial && self.doc.path.as_ref() == Some(p))
+                .map(|(_, p, _)| p.clone());
+            match again {
+                Some(p) => self.save_to(&p),
+                None => self.web_save_as(),
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         match self.doc.path.clone() {
             Some(p) => self.save_to(&p),
             None => self.open_browser(Mode::SaveSong),
@@ -790,11 +907,22 @@ impl App {
     }
 
     fn save_to_inner(&mut self, path: &Path) {
+        #[cfg(target_arch = "wasm32")]
+        let target = self
+            .web_target
+            .as_ref()
+            .filter(|(n, p, _)| *n == self.doc_serial && p == path)
+            .map(|(_, _, t)| t.clone())
+            .ok_or_else(|| format!("{}: no place to save to", path.display()));
         let result = self.song_for_save().and_then(|song| {
             let bytes = song
                 .write()
                 .map_err(|e| format!("cannot write the song: {e}"))?;
             session::write_file(path, &bytes)?;
+            // the page's files are its memory's: the song goes to the computer where Save As
+            // chose (`web_save_to`; task-172); `web_written` finishes the save
+            #[cfg(target_arch = "wasm32")]
+            crate::web::write_target(crate::web::SaveFor::Song, &target?, bytes);
             Ok(song)
         });
         match result {
@@ -803,9 +931,17 @@ impl App {
                 self.doc.source = song;
                 self.doc.path = Some(path.to_path_buf());
                 self.doc.modified = false;
-                self.status = Some(format!("Saved {}", path.display()));
-                if let Some(t) = self.after_save.take() {
-                    self.proceed(t);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.status = Some(format!("Saved {}", path.display()));
+                    if let Some(t) = self.after_save.take() {
+                        self.proceed(t);
+                    }
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    self.status = Some(format!("Saving {name} ..."));
                 }
             }
             Err(e) => {
@@ -821,10 +957,21 @@ impl App {
     /// the song as saved is rendered by `orb render`'s code (`orb_cli::render`), so the file is
     /// the one `orb render` writes for the saved song.
     pub fn export_to(&mut self, path: &Path) {
+        #[cfg(not(target_arch = "wasm32"))]
         self.action(|s| s.export_to_inner(path));
+        #[cfg(target_arch = "wasm32")]
+        {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let target = crate::web::SaveTarget::download(&name);
+            self.action(|s| s.export_to_inner(path, target));
+        }
     }
 
-    fn export_to_inner(&mut self, path: &Path) {
+    fn export_to_inner(
+        &mut self,
+        path: &Path,
+        #[cfg(target_arch = "wasm32")] target: crate::web::SaveTarget,
+    ) {
         let Some(format) = ExportFormat::of_path(path).map(|f| match f {
             ExportFormat::Wav => Format::Wav,
             ExportFormat::Flac => Format::Flac,
@@ -840,6 +987,9 @@ impl App {
             self.fail("An export is still running.");
             return;
         }
+        // the web exports FLAC only, whatever the name says (the user's decision of 2026-11-27)
+        #[cfg(target_arch = "wasm32")]
+        let _ = format;
         let song = self.song_bytes().and_then(|bytes| {
             let parsed = rbs::Song::parse(&bytes).map_err(|e| e.to_string())?;
             let mut song = orb_engine::load::convert(&parsed).map_err(|e| format!("{e:?}"))?;
@@ -864,31 +1014,166 @@ impl App {
             },
             ..ModOpts::default()
         };
-        let out = path.to_path_buf();
         let label = self.doc.name();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut r = Renderer::new(mods);
-            let result = r
-                .render_to_file(
-                    &label,
-                    &song,
-                    DEFAULT_IDLE_BLOCKS,
-                    format,
-                    DEFAULT_QUALITY,
-                    &out,
-                )
-                .map_err(|orb_cli::Fail(_, m)| m);
-            let _ = tx.send(result);
-        });
+        #[cfg(not(target_arch = "wasm32"))]
+        let job = {
+            let out = path.to_path_buf();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut r = Renderer::new(mods);
+                let result = r
+                    .render_to_file(
+                        &label,
+                        &song,
+                        DEFAULT_IDLE_BLOCKS,
+                        format,
+                        DEFAULT_QUALITY,
+                        &out,
+                    )
+                    .map_err(|orb_cli::Fail(_, m)| m);
+                let _ = tx.send(result);
+            });
+            Job {
+                rx,
+                path: path.to_path_buf(),
+            }
+        };
+        // the web page has one thread: the export runs in slices, one per frame
+        // (`poll_export`; task-170)
+        #[cfg(target_arch = "wasm32")]
+        let job = match WebExport::start(mods, &label, &song) {
+            Ok(web) => Job {
+                web,
+                target,
+                path: path.to_path_buf(),
+            },
+            Err(e) => {
+                self.fail(e);
+                return;
+            }
+        };
         self.status = Some(format!("Exporting {} ...", path.display()));
-        self.export = Some(Job {
-            rx,
-            path: path.to_path_buf(),
-        });
+        self.export = Some(job);
+    }
+
+    /// Runs the next slice of the web's export, shows its progress, and at the end encodes the
+    /// file and has the browser download it.
+    #[cfg(target_arch = "wasm32")]
+    pub fn poll_export(&mut self, ctx: &Context) {
+        let Some(job) = &mut self.export else {
+            return;
+        };
+        let name = job
+            .path
+            .file_name()
+            .map_or_else(|| "export".into(), |n| n.to_string_lossy().into_owned());
+        match job.web.slice() {
+            None => {
+                let (what, pc) = job.web.progress();
+                self.status = Some(format!("{what} {name} ... {pc}%"));
+                ctx.request_repaint();
+            }
+            Some(Ok(bytes)) => {
+                if let Some(job) = self.export.take() {
+                    crate::web::write_target(crate::web::SaveFor::Export, &job.target, bytes);
+                    self.status = Some(format!("Writing {name} ..."));
+                }
+            }
+            Some(Err(e)) => {
+                self.status = None;
+                self.export = None;
+                self.fail(e);
+            }
+        }
+    }
+
+    /// File > Save As on the web: the browser's save picker, else a download named after the
+    /// song (`web_save_to` once the browser answers).
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn web_save_as(&mut self) {
+        let name = self.doc.name();
+        let name = if name.to_ascii_lowercase().ends_with(".rbs") {
+            name
+        } else {
+            format!("{name}.rbs")
+        };
+        crate::web::pick_save(crate::web::SaveFor::Song, &name);
+    }
+
+    /// File > Export on the web: the browser's save picker for `SONG.flac`, else a download
+    /// (`web_export_to` once the browser answers).
+    #[cfg(target_arch = "wasm32")]
+    fn web_export(&mut self) {
+        if self.export.is_some() {
+            self.fail("An export is still running.");
+            return;
+        }
+        let name = self.doc.name();
+        let stem = Path::new(&name)
+            .file_stem()
+            .map_or_else(|| "Untitled".into(), |s| s.to_string_lossy().into_owned());
+        crate::web::pick_save(crate::web::SaveFor::Export, &format!("{stem}.flac"));
+    }
+
+    /// Saves the song to `target` (the browser's answer to Save As): its memory path becomes
+    /// the song's path, so Save writes there again.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn web_save_to(&mut self, target: crate::web::SaveTarget) {
+        let path = Path::new(crate::web::SONGS_DIR).join(target.file_name());
+        self.web_target = Some((self.doc_serial, path.clone(), target));
+        self.save_to(&path);
+    }
+
+    /// Exports the loop to `target` (the browser's answer to Export).
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn web_export_to(&mut self, target: crate::web::SaveTarget) {
+        let path = Path::new(crate::web::SONGS_DIR).join(target.file_name());
+        self.action(|s| s.export_to_inner(&path, target));
+    }
+
+    /// The browser's save picker was closed without a choice.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn web_save_cancelled(&mut self, what: crate::web::SaveFor) {
+        if what == crate::web::SaveFor::Song {
+            self.after_save = None;
+        }
+    }
+
+    /// The browser has written (or failed to write) the file `name` of a save or an export;
+    /// `how` is what the status line adds (" (downloaded)").
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn web_written(
+        &mut self,
+        what: crate::web::SaveFor,
+        name: &str,
+        how: &str,
+        result: Result<(), String>,
+    ) {
+        match (what, result) {
+            (crate::web::SaveFor::Song, Ok(())) => {
+                self.status = Some(format!("Saved {name}{how}"));
+                if let Some(t) = self.after_save.take() {
+                    self.proceed(t);
+                }
+            }
+            (crate::web::SaveFor::Song, Err(e)) => {
+                self.status = None;
+                self.doc.modified = true;
+                self.after_save = None;
+                self.fail(format!("{name}: cannot save: {e}"));
+            }
+            (crate::web::SaveFor::Export, Ok(())) => {
+                self.status = Some(format!("Exported {name}{how}"));
+            }
+            (crate::web::SaveFor::Export, Err(e)) => {
+                self.status = None;
+                self.fail(format!("{name}: cannot export: {e}"));
+            }
+        }
     }
 
     /// Takes the result of a running export.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn poll_export(&mut self, ctx: &Context) {
         let Some(job) = &self.export else {
             return;
@@ -1000,6 +1285,15 @@ impl App {
 
     /// Runs a menu command.
     pub fn command(&mut self, cmd: Cmd) {
+        // a mod of the web's picked folder is read from the computer first (task-172)
+        #[cfg(target_arch = "wasm32")]
+        if let Cmd::UseKit(Kit::Mod(p)) | Cmd::ChooseVariant(p) = &cmd
+            && orb_cli::fs::is_lazy(p)
+        {
+            let p = p.clone();
+            self.web_load_then(p, crate::web::Picked::Command(cmd));
+            return;
+        }
         // a plugin's editor has no Save, Save As, Export or keyboard (task-201)
         if self.is_plugin()
             && matches!(
@@ -1016,12 +1310,26 @@ impl App {
         }
         match cmd {
             Cmd::New => self.new_song(),
+            #[cfg(not(target_arch = "wasm32"))]
             Cmd::Open => self.open_browser(Mode::OpenSong),
+            // the page cannot list the computer's folders: File > Open Local... is the browser's
+            // own file picker (`App::web_picked` opens what it gives; the user's decision of
+            // 2026-11-27)
+            #[cfg(target_arch = "wasm32")]
+            Cmd::Open => crate::web::pick(crate::web::Pick::Song),
             Cmd::Save => self.save(),
+            #[cfg(not(target_arch = "wasm32"))]
             Cmd::SaveAs => self.open_browser(Mode::SaveSong),
+            // the web has no in-app save dialog: the browser's own (`showSaveFilePicker`) or a
+            // download (the user's decision of 2026-11-27)
+            #[cfg(target_arch = "wasm32")]
+            Cmd::SaveAs => self.web_save_as(),
             Cmd::Export => {
                 if self.panel.transport.song_mode {
+                    #[cfg(not(target_arch = "wasm32"))]
                     self.open_browser(Mode::Export);
+                    #[cfg(target_arch = "wasm32")]
+                    self.web_export();
                 } else {
                     self.fail(
                         "Export needs song mode: the original's export is disabled in pattern \
@@ -1031,7 +1339,10 @@ impl App {
             }
             Cmd::Info => self.show_info(),
             Cmd::KeyHelp => self.show_key_help(),
+            #[cfg(not(target_arch = "wasm32"))]
             Cmd::AudioOutput => self.show_audio(),
+            #[cfg(target_arch = "wasm32")]
+            Cmd::AudioOutput => {}
             Cmd::PluginUsage => {
                 if self.is_plugin() {
                     self.show_plugin_usage();
@@ -1039,7 +1350,14 @@ impl App {
             }
             Cmd::OutputRouting => self.show_routing(),
             Cmd::About => self.show_about(),
+            #[cfg(not(target_arch = "wasm32"))]
             Cmd::ChooseModFile => self.open_browser(Mode::ChooseMod),
+            #[cfg(target_arch = "wasm32")]
+            Cmd::ChooseModFile => crate::web::pick(crate::web::Pick::Mod),
+            #[cfg(target_arch = "wasm32")]
+            Cmd::ChooseModsFolder => crate::web::pick(crate::web::Pick::ModsFolder),
+            #[cfg(not(target_arch = "wasm32"))]
+            Cmd::ChooseModsFolder => {}
             Cmd::UseKit(kit) => self.use_kit(kit),
             Cmd::ChooseVariant(p) => self.choose_variant(p),
             Cmd::DemoSong => self.demo_song(),
@@ -1462,6 +1780,28 @@ impl App {
         self.panel.press(&button, 0.0);
     }
 
+    /// Makes `dir` the Mods folder (the browser's mode "Choose mods folder", the web's Mods >
+    /// Choose Mods Folder...): saved in the settings, and the Mods menu reads it again.
+    pub fn use_mods_folder(&mut self, dir: &Path) {
+        self.settings.set_mods_dir(Some(dir.to_path_buf()));
+        if let Err(e) = self.settings.save() {
+            self.fail(e);
+        }
+        self.refresh_mods();
+        let n = self
+            .mods()
+            .and_then(|m| m.as_ref().ok())
+            .map_or(0, |m| m.len());
+        let name = dir.file_name().map_or_else(
+            || dir.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        self.status = Some(format!(
+            "Mods folder {name}: {n} mod{}",
+            if n == 1 { "" } else { "s" }
+        ));
+    }
+
     /// What a browser chose, by its mode (not an open: `open_song`).
     pub fn chosen(&mut self, mode: Mode, path: PathBuf) {
         match mode {
@@ -1652,13 +1992,18 @@ impl App {
         }
     }
 
-    /// The window's title: the song's name, marked when modified.
-    pub fn update_title(&mut self, ctx: &Context) {
-        let title = format!(
+    /// The text of the window's title: the song's name, marked when modified.
+    pub fn title_text(&self) -> String {
+        format!(
             "OpenRB-338 - {}{}",
             self.doc.name(),
             if self.doc.modified { " *" } else { "" }
-        );
+        )
+    }
+
+    /// The window's title: the song's name, marked when modified.
+    pub fn update_title(&mut self, ctx: &Context) {
+        let title = self.title_text();
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
@@ -1687,7 +2032,8 @@ impl App {
             // plugin's window (egui-baseview 0.9) does not answer `RequestPaste` (it reads the
             // clipboard only on a paste key, which the plugin leaves to the host), so there the
             // item reads the system clipboard directly (task-274, task-287)
-            Some(Cmd::PastePattern) if !self.is_plugin() => {
+            // (the web page reads its own copy: a page cannot read the clipboard unasked)
+            Some(Cmd::PastePattern) if !self.is_plugin() && !cfg!(target_arch = "wasm32") => {
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
             }
@@ -1713,7 +2059,7 @@ impl App {
             if item(ui, "New", key(&shortcuts::NEW)) {
                 *cmd = Some(Cmd::New);
             }
-            if item(ui, "Open...", key(&shortcuts::OPEN)) {
+            if item(ui, OPEN_ITEM, key(&shortcuts::OPEN)) {
                 *cmd = Some(Cmd::Open);
             }
             if !plugin && item(ui, "Save", key(&shortcuts::SAVE)) {
@@ -1879,6 +2225,9 @@ impl App {
             if item(ui, "Choose file...", None) {
                 *cmd = Some(Cmd::ChooseModFile);
             }
+            if cfg!(target_arch = "wasm32") && item(ui, "Choose Mods Folder...", None) {
+                *cmd = Some(Cmd::ChooseModsFolder);
+            }
             if item(ui, "Refresh List", None) {
                 *cmd = Some(Cmd::RefreshMods);
             }
@@ -1918,7 +2267,8 @@ impl App {
                 }
                 return;
             }
-            if item(ui, "Audio Output...", None) {
+            // the web page plays through the browser's default output: nothing to choose
+            if !cfg!(target_arch = "wasm32") && item(ui, "Audio Output...", None) {
                 *cmd = Some(Cmd::AudioOutput);
             }
             ui.separator();

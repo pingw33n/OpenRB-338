@@ -11,6 +11,7 @@
 pub mod about;
 pub mod app;
 pub mod art;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod audio_window;
 pub mod backdrop;
 pub mod behavior;
@@ -44,3 +45,5 @@ pub mod shortcuts;
 pub mod skin;
 pub mod template;
 pub mod version;
+#[cfg(target_arch = "wasm32")]
+pub mod web;

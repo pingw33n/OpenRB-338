@@ -115,4 +115,8 @@ jobs:
       # that orb-player's feature `web` stays out of it.
       - run: cargo build --locked --target wasm32-unknown-unknown -p orb-player -p orb-worklet
       - run: cargo build --locked --target wasm32-unknown-unknown -p orb-web-demo
+      # The web page (task-172, docs/web.md section 7): orb-ui on eframe's web runner, and its
+      # clippy (cfg(target_arch = "wasm32") code that the native clippy job does not see).
+      - run: cargo build --locked --target wasm32-unknown-unknown -p orb-web
+      - run: cargo clippy --locked --target wasm32-unknown-unknown -p orb-web --all-targets -- -D warnings
       - run: scripts/wasm-check.sh

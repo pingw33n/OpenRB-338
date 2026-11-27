@@ -15,9 +15,9 @@ name = "OpenRB-338"
 path = "src/main.rs"
 required-features = ["app"]
 
-# `app`: the standalone window on eframe (the binary, `impl eframe::App for App`). The panel
-# itself needs only egui, so the plugin's editor (orb-plugin, task-201) takes the library
-# without it and links no eframe or winit.
+# `app`: the standalone window on eframe (the binary, `impl eframe::App for App`; on wasm32 the
+# web page, `orb_ui::web`, task-172). The panel itself needs only egui, so the plugin's editor
+# (orb-plugin, task-201) takes the library without it and links no eframe or winit.
 [features]
 default = ["app"]
 app = ["dep:eframe"]
@@ -29,8 +29,9 @@ orb-player = { path = "../orb-player" }
 # Song files and the standard mod (the built-in drum samples).
 rbs = { path = "../rbs" }
 rbm = { path = "../rbm" }
-# The export and the mod lookup of `orb render` (task-047).
-orb-cli = { path = "../orb-cli" }
+# The export and the mod lookup of `orb render` (task-047); natively with its Ogg encoder
+# (below), which the web build has not (task-172).
+orb-cli = { path = "../orb-cli", default-features = false }
 # The settings file (task-107).
 serde = { version = "1", features = ["derive"] }
 toml = "=0.9.12"
@@ -45,19 +46,52 @@ egui_extras = { version = "0.37.0", features = ["svg"] }
 resvg = { version = "0.45.1", default-features = false }
 # Saves the --screenshot PNG; decodes the mods' splash.jpg.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# The pattern as JSON on the clipboard (task-287).
+serde_json = "1"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+orb-cli = { path = "../orb-cli", default-features = false, features = ["ogg"] }
 # The native message box of the crash hook (task-157). No default features: on Linux the
 # box is run by `zenity` at run time (no GTK or other system library to link), and the Wayland
 # window-identifier code is not needed for a box without a parent window.
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
-
-# The pattern as JSON on the clipboard (task-287).
-serde_json = "1"
 # The plugin's direct clipboard read (task-287; egui-baseview reads the clipboard only on a
 # paste key, which a plugin leaves to the host). The version egui-winit already links. No
 # default features: the image support is not needed. On Linux it speaks X11 only (a pure
 # Wayland session without XWayland reads nothing, and Paste shows "holds no pattern").
 arboard = { version = "3.7", default-features = false }
+
+# The web build (task-172, docs/web.md): the AudioWorklet output of orb-player, the browser
+# glue (file pickers, downloads, localStorage, the error box) and `Instant` (std's panics on
+# wasm32-unknown-unknown). Pinned to the versions of Cargo.lock, as orb-player's.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+orb-player = { path = "../orb-player", features = ["web"] }
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "=0.4.79"
+js-sys = "=0.3.106"
+web-sys = { version = "=0.3.106", features = [
+  "Blob",
+  "BlobPropertyBag",
+  "console",
+  "CssStyleDeclaration",
+  "Document",
+  "DomTokenList",
+  "Element",
+  "Event",
+  "EventTarget",
+  "File",
+  "FileList",
+  "HtmlAnchorElement",
+  "HtmlCanvasElement",
+  "HtmlElement",
+  "HtmlInputElement",
+  "Location",
+  "Node",
+  "Storage",
+  "Url",
+  "Window",
+] }
+web-time = "=1.1.0"
 
 [dev-dependencies]
 orb-ui-art = { path = "../orb-ui-art" }

@@ -208,7 +208,7 @@ impl Bitmaps {
         match kit {
             Kit::Standard => Self::builtin().clone(),
             Kit::Mod(path) => {
-                let opened = std::fs::read(path)
+                let opened = orb_cli::fs::read(path)
                     .map_err(|e| e.to_string())
                     .and_then(|b| rbm::Rbm::parse(b).map_err(|e| e.to_string()))
                     .and_then(|r| {

@@ -76,6 +76,18 @@ pub trait Port: Send {
     fn follow_frames(&self) -> u64 {
         CALL_FRAMES as u64
     }
+    /// The commands sent that the latest snapshot does not show applied yet: 0 where the
+    /// snapshot after [`Port::follow_frames`] shows them (the native player). The web's
+    /// worklet answers after a delay that varies (`orb_player::remote::Player::unapplied`,
+    /// docs/web.md), so there the panel takes the engine's values only once this is 0.
+    fn unapplied(&self) -> u64 {
+        0
+    }
+    /// The errors of the audio output since the last call (the web's worklet; none natively,
+    /// where the stream reports its own).
+    fn take_errors(&mut self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 impl Port for Player {
@@ -629,6 +641,7 @@ impl Link {
         playing
             || fresh
             || frames <= mark
+            || self.player.unapplied() > 0
             || !self.backlog.is_empty()
             || self.deferred.is_some()
             || panel.meters.values().any(|&m| m > 0)
@@ -1243,6 +1256,7 @@ impl Link {
         // play it
         if let Some(d) = self.deferred
             && s.frames > d.after
+            && self.player.unapplied() == 0
             && (!s.playing || s.patterns[d.row] != Some(d.pattern))
         {
             self.send_deferred();
@@ -1285,7 +1299,7 @@ impl Link {
         panel.playing_step909 = step(Device::Tr909, 30);
 
         // the values only from a call that ran the commands sent, and not of a waiting song
-        if s.frames > self.mark && !s.pending {
+        if s.frames > self.mark && !s.pending && self.player.unapplied() == 0 {
             self.follow_values(panel, &s, &live);
             // the first values after the commands sent: the frame has drawn the panel before
             // this, so it is drawn once more with them (a File > New or Open of a stopped song

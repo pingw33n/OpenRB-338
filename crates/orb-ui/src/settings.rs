@@ -58,6 +58,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
@@ -87,6 +88,13 @@ pub struct AudioChoice {
     pub buffer: u32,
 }
 
+/// The buffer size asked for by default: the native output's request (task-176). The web's
+/// output has no such setting (its AudioWorklet renders 128-frame quanta).
+#[cfg(not(target_arch = "wasm32"))]
+const DEFAULT_BUFFER: u32 = orb_player::output::BUFFER_FRAMES;
+#[cfg(target_arch = "wasm32")]
+const DEFAULT_BUFFER: u32 = 2048;
+
 impl Default for AudioChoice {
     fn default() -> Self {
         AudioChoice {
@@ -94,11 +102,12 @@ impl Default for AudioChoice {
             device: None,
             device_name: None,
             rate: None,
-            buffer: orb_player::output::BUFFER_FRAMES,
+            buffer: DEFAULT_BUFFER,
         }
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AudioChoice {
     /// The request that opens this choice.
     pub fn request(&self) -> orb_player::devices::Request {
@@ -298,12 +307,17 @@ fn home() -> Option<PathBuf> {
 /// The user's documents folder: `~/Documents` if it exists, else the home folder, else the
 /// current folder.
 pub fn documents_dir() -> PathBuf {
-    let home = home();
-    home.as_ref()
-        .map(|h| h.join("Documents"))
-        .filter(|d| d.is_dir())
-        .or(home)
-        .unwrap_or_else(|| PathBuf::from("."))
+    #[cfg(target_arch = "wasm32")]
+    return PathBuf::from(crate::web::SONGS_DIR);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let home = home();
+        home.as_ref()
+            .map(|h| h.join("Documents"))
+            .filter(|d| d.is_dir())
+            .or(home)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
 }
 
 /// The user's home folder, when it is known.
@@ -313,19 +327,25 @@ pub fn home_dir() -> Option<PathBuf> {
 
 /// The settings file's default place (see the module text).
 pub fn default_file() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("ORB_UI_CONFIG").filter(|p| !p.is_empty()) {
-        return Some(PathBuf::from(p));
+    // the web's settings are in localStorage under this key (`read_text`)
+    #[cfg(target_arch = "wasm32")]
+    return Some(PathBuf::from("/OpenRB-338/").join(FILE_NAME));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Some(p) = std::env::var_os("ORB_UI_CONFIG").filter(|p| !p.is_empty()) {
+            return Some(PathBuf::from(p));
+        }
+        let base = if cfg!(windows) {
+            std::env::var_os("APPDATA").map(PathBuf::from)
+        } else if let Some(x) = std::env::var_os("XDG_CONFIG_HOME").filter(|x| !x.is_empty()) {
+            Some(PathBuf::from(x))
+        } else if cfg!(target_os = "macos") {
+            home().map(|h| h.join("Library/Application Support"))
+        } else {
+            home().map(|h| h.join(".config"))
+        };
+        base.map(|b| b.join("OpenRB-338").join(FILE_NAME))
     }
-    let base = if cfg!(windows) {
-        std::env::var_os("APPDATA").map(PathBuf::from)
-    } else if let Some(x) = std::env::var_os("XDG_CONFIG_HOME").filter(|x| !x.is_empty()) {
-        Some(PathBuf::from(x))
-    } else if cfg!(target_os = "macos") {
-        home().map(|h| h.join("Library/Application Support"))
-    } else {
-        home().map(|h| h.join(".config"))
-    };
-    base.map(|b| b.join("OpenRB-338").join(FILE_NAME))
 }
 
 /// The name the settings file had before task-289, in the same folder.
@@ -483,7 +503,7 @@ impl Settings {
     /// read error.
     fn read(file: &Path) -> Result<Option<Self>, std::io::Error> {
         let mut s = Self::default();
-        let text = match std::fs::read_to_string(file) {
+        let text = match read_text(file) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             // Not UTF-8: damaged.
@@ -533,8 +553,7 @@ impl Settings {
             device: text("audio_device"),
             device_name: text("audio_device_name"),
             rate: number("audio_sample_rate", &AUDIO_RATES),
-            buffer: number("audio_buffer_size", &AUDIO_BUFFERS)
-                .unwrap_or(orb_player::output::BUFFER_FRAMES),
+            buffer: number("audio_buffer_size", &AUDIO_BUFFERS).unwrap_or(DEFAULT_BUFFER),
         };
         if let Some(t) = table
             .get("theme")
@@ -810,6 +829,7 @@ impl Settings {
                 .collect(),
         })
         .map_err(|e| format!("cannot encode: {e}"))?;
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir)
                 .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
@@ -844,9 +864,31 @@ impl Settings {
     }
 }
 
+/// The text of the settings file `file`.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_text(file: &Path) -> std::io::Result<String> {
+    std::fs::read_to_string(file)
+}
+
+/// On the web the settings file is the value of the `localStorage` key that is its path
+/// ([`default_file`]; task-170): the same TOML text.
+#[cfg(target_arch = "wasm32")]
+fn read_text(file: &Path) -> std::io::Result<String> {
+    crate::web::storage_get(&file.to_string_lossy())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "not in localStorage"))
+}
+
+/// [`read_text`]'s counterpart on the web: one `localStorage.setItem` (atomic by itself).
+#[cfg(target_arch = "wasm32")]
+fn write_atomic(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    crate::web::storage_set(&file.to_string_lossy(), &String::from_utf8_lossy(bytes))
+        .map_err(std::io::Error::other)
+}
+
 /// Writes `bytes` to `file` through a temporary file in the same folder and a rename, so a
 /// crash or a full disk never leaves a short or empty file. The temporary name is unique per
 /// process and call, so two instances saving at once never share one.
+#[cfg(not(target_arch = "wasm32"))]
 fn write_atomic(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let mut tmp = file.as_os_str().to_owned();
