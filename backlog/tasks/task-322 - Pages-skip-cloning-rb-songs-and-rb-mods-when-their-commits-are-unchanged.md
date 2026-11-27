@@ -5,7 +5,7 @@ status: To Do
 assignee:
   - '@agent-worker'
 created_date: '2026-11-27T14:25:00Z'
-updated_date: '2026-11-27T18:25:00Z'
+updated_date: '2026-11-27T18:33:00Z'
 labels:
   - tools
   - cli
@@ -104,6 +104,12 @@ Verification (on the worktree, commands run from scratchpad verify.sh):
 - Error path (refs/heads/main replaced by a branch that does not exist, so ls-remote prints nothing): "::error::SONGS_COMMIT is empty or not a commit", exit 1, and the GITHUB_ENV file stays empty.
 
 AC 1 is not checked: it needs two real Pages runs on main after this fix is merged (see the AC 1 note above). The task stays To Do.
+
+Post-merge runs (supervisor, 2026-11-27):
+- Pages 46048807255 and 46048996830 on be023c8: failed in "Current commits of the collections" (the check read variables set only in GITHUB_ENV); fixed by eb657ee.
+- Pages 46049486149 on eb657ee: success; both keys missed, "rb-songs a5985e2…: cloned, part made", "rb-mods bfbd8c9…: cloned, part made"; deployed.
+- Pages 46050058200 on eb657ee, no collection push between: success; "Cache restored from key" for both, "part from the cache, not cloned" for both, build 1 min 51 s against 3 min 54 s; deployed. Live web/index.json: rb-songs a5985e2, rb-mods bfbd8c9, 5830 songs, 326 mods.
+- Still open for AC 1: a run after a push to only one collection (only that one clones). Waits for the user's next push to rb-songs or rb-mods.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
