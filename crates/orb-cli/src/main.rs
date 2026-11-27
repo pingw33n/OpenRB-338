@@ -186,21 +186,47 @@ enum Cmd {
     #[command(hide = true)]
     WebIndex {
         /// The folder of the songs (the `songs` folder of rb-songs), searched for .rbs files.
-        #[arg(long, value_name = "DIR")]
-        songs: PathBuf,
+        #[arg(
+            long,
+            value_name = "DIR",
+            required_unless_present_any = ["songs_part", "write_mods_part"]
+        )]
+        songs: Option<PathBuf>,
         /// The folder of the recrypted mods (the `mods` folder of rb-mods), searched for .rbm
         /// files.
-        #[arg(long, value_name = "DIR")]
-        mods: PathBuf,
+        #[arg(
+            long,
+            value_name = "DIR",
+            required_unless_present_any = ["mods_part", "write_songs_part"]
+        )]
+        mods: Option<PathBuf>,
         /// The commit of rb-songs the files are at (pins raw_base).
         #[arg(long, value_name = "SHA")]
         songs_commit: Option<String>,
         /// The commit of rb-mods the files are at (pins raw_base).
         #[arg(long, value_name = "SHA")]
         mods_commit: Option<String>,
-        /// The index to write.
-        #[arg(short, long, value_name = "FILE")]
-        output: PathBuf,
+        /// Take the songs from this part (made by --write-songs-part) instead of --songs.
+        #[arg(long, value_name = "FILE", conflicts_with = "songs")]
+        songs_part: Option<PathBuf>,
+        /// Take the mods from this part (made by --write-mods-part) instead of --mods.
+        #[arg(long, value_name = "FILE", conflicts_with = "mods")]
+        mods_part: Option<PathBuf>,
+        /// Write what --songs alone gives (the rows without mod_variants) to FILE and stop: the
+        /// CI caches it per rb-songs commit. --mods is not needed then.
+        #[arg(long, value_name = "FILE", requires = "songs")]
+        write_songs_part: Option<PathBuf>,
+        /// Write what --mods alone gives to FILE and stop.
+        #[arg(long, value_name = "FILE", requires = "mods")]
+        write_mods_part: Option<PathBuf>,
+        /// The index to write (not with --write-songs-part / --write-mods-part).
+        #[arg(
+            short,
+            long,
+            value_name = "FILE",
+            required_unless_present_any = ["write_songs_part", "write_mods_part"]
+        )]
+        output: Option<PathBuf>,
     },
     /// Work with .rbm mods: recrypt, unpack, pack and pack-standard.
     #[command(name = "mod", subcommand)]
@@ -389,17 +415,20 @@ fn main() -> ExitCode {
             mods,
             songs_commit,
             mods_commit,
+            songs_part,
+            mods_part,
+            write_songs_part,
+            write_mods_part,
             output,
-        } => orb_cli::webindex::build(&orb_cli::webindex::Options {
-            songs: &songs,
-            mods: &mods,
-            songs_commit: songs_commit.as_deref(),
-            mods_commit: mods_commit.as_deref(),
-        })
-        .and_then(|out| {
-            std::fs::write(&output, out)
-                .map_err(|e| fail(1, format!("{}: cannot write: {e}", output.display())))
-        }),
+        } => web_index(
+            songs,
+            mods,
+            songs_part,
+            mods_part,
+            (write_songs_part, write_mods_part),
+            (songs_commit, mods_commit),
+            output,
+        ),
         Cmd::Mod(ModCmd::Recrypt {
             inputs,
             output,
@@ -735,4 +764,46 @@ fn recrypt(
             format!("{n} of {} mods failed", report.results.len()),
         )),
     }
+}
+
+/// `orb web-index` (docs/web.md section 8): the index, or with a `--write-*-part` option the part
+/// of one collection that the Pages workflow caches (task-322).
+fn web_index(
+    songs: Option<PathBuf>,
+    mods: Option<PathBuf>,
+    songs_part: Option<PathBuf>,
+    mods_part: Option<PathBuf>,
+    write: (Option<PathBuf>, Option<PathBuf>),
+    commits: (Option<String>, Option<String>),
+    output: Option<PathBuf>,
+) -> Result<(), Fail> {
+    use orb_cli::webindex::{self, Source};
+    let put = |path: &PathBuf, text: String| {
+        std::fs::write(path, text)
+            .map_err(|e| fail(1, format!("{}: cannot write: {e}", path.display())))
+    };
+    if write.0.is_some() || write.1.is_some() {
+        if let (Some(dir), Some(out)) = (&songs, &write.0) {
+            put(out, webindex::songs_part(dir)?.to_json())?;
+        }
+        if let (Some(dir), Some(out)) = (&mods, &write.1) {
+            put(out, webindex::mods_part(dir)?.to_json())?;
+        }
+        return Ok(());
+    }
+    fn source<'a>(dir: &'a Option<PathBuf>, part: &'a Option<PathBuf>) -> Source<'a> {
+        match (dir, part) {
+            (Some(d), _) => Source::Dir(d),
+            (None, Some(p)) => Source::Part(p),
+            (None, None) => unreachable!("clap requires one"),
+        }
+    }
+    let out = webindex::build(&webindex::Options {
+        songs: source(&songs, &songs_part),
+        mods: source(&mods, &mods_part),
+        songs_commit: commits.0.as_deref(),
+        mods_commit: commits.1.as_deref(),
+    })?;
+    let output = output.expect("clap requires --output");
+    put(&output, out)
 }

@@ -749,8 +749,8 @@ mod tests {
         let std_mod = std::fs::read(repo.join("assets/Standard.rbm")).unwrap();
         std::fs::write(mods.join("Std.rbm"), &std_mod).unwrap();
         let text = orb_cli::webindex::build(&orb_cli::webindex::Options {
-            songs: &songs,
-            mods: &mods,
+            songs: orb_cli::webindex::Source::Dir(&songs),
+            mods: orb_cli::webindex::Source::Dir(&mods),
             songs_commit: Some("abc"),
             mods_commit: Some("def"),
         })

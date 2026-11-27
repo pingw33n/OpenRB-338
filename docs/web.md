@@ -374,7 +374,8 @@ mods to find one by its INFO name (326 mods, about 1 GB). The deploy runs, once 
 and the page fetches `index.json`, then only the song and the mod it needs, from `raw_base` +
 `path` (raw.githubusercontent.com sends `Access-Control-Allow-Origin: *`; a path is the file's
 name as git stores it, so the page percent-encodes it). The subcommand is a developer tool,
-hidden from `orb --help` (task-137). Code: `crates/orb-cli/src/webindex.rs`; test:
+hidden from `orb --help` (task-137). The Pages workflow does not run it in one piece: it caches
+one part per collection and combines them (8.4). Code: `crates/orb-cli/src/webindex.rs`; test:
 `crates/orb-cli/tests/web_index.rs`.
 
 **The output is deterministic**: compact JSON on one line, tables sorted by the bytes of the
@@ -461,6 +462,22 @@ does not list are gone (the page gets them from the song it opens), and the hash
 text saves 2 % over the compact JSON and needs its own escaping and a hand parser (a title may
 hold tabs or newlines, a list of mods has no cell), so the index stays JSON, which the page
 already parses with serde.
+
+### 8.4 Parts (task-322)
+
+What the index derives from one collection alone is its **part**, so that the deploy clones a
+collection only when its commit changed: `orb web-index --songs DIR --write-songs-part FILE`
+writes the song rows (the first 11 columns, `dir` indexing the part's own `song_dirs`) and
+`--mods DIR --write-mods-part FILE` the mod rows with `mods_dir`; each is compact JSON
+`{format: "orb-web-index-songs-part" | "orb-web-index-mods-part", version, song_dirs |
+mods_dir, rows}`. `--songs-part FILE` / `--mods-part FILE` take a part in place of the folder
+(a folder and a part of the same collection together are refused). `mod_variants`, the one column
+that needs both collections, is computed when the parts are combined, so it is current when one
+part is old. The combined `index.json` is byte for byte the full run's (a full run is both
+parts and the same combine); `tests/web_index.rs` checks it on the fixture, also with one part
+older than the other, and on the real collections (rb-songs `a5985e2`, rb-mods `bfbd8c9`, 930,917
+bytes). The part files carry the format version, so a part of another version is refused; the
+cache key of the workflow holds a hash of the code that makes them (docs/building.md).
 
 ## 9. The collections on the page (task-174)
 

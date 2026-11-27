@@ -6,6 +6,7 @@
 # site: the web app (task-175) is built in the same job with the tag's version and the
 # collection index of the two repositories' current commits, and goes into the folder under
 # web/ (docs/building.md "The web page"). A redeploy by hand picks up new collection commits.
+# A collection is cloned only when its commit (or the index code) changed (task-322).
 #
 # One-time setting (docs/building.md): Settings > Pages > Source: GitHub Actions. Until it is
 # set, the deploy job fails at deploy-pages with "Pages site not found / not enabled".
@@ -85,37 +86,78 @@ jobs:
       # its SHA-256. build-web.sh finds it in target/ and runs it on the page's module.
       - name: Install wasm-opt
         run: scripts/binaryen.sh
-      # The collections at their current main, shallow (a blobless clone does not help:
-      # `orb web-index` reads every file for its size, hash and mod name). The folders are
-      # named songs and mods as in the repositories, and the commits that are checked out are
-      # the ones index.json pins.
       # The clones, both target folders and the wasm-bindgen-cli build need roughly 8 GB. On the
       # first run the runner showed 86 GB available on /: one observation, not a guarantee
       # of the runner's size. The log shows what is left on each run.
       - name: Free disk space
         run: df -h
-      - name: Clone the collections
+      # The collections (task-322). The current commit of each is asked with `git ls-remote`
+      # (no download). What `orb web-index` derives from a collection alone, its part, is
+      # cached under a key of the commit and of the code that makes the part: the web-index code
+      # and what it reads (info.rs, mods.rs, render.rs, fs.rs, lib.rs of orb-cli, and the engine, rbs and rbm sources that load a song and a mod, Cargo.lock), which holds the index format
+      # version (webindex.rs VERSION). A change to any of them, or a new commit, is a miss and
+      # clones that collection only. The song-to-mod resolution is made when the parts are
+      # combined, so it is current even if one side came from the cache. GitHub drops a cache
+      # entry unused for 7 days; the next run then clones once again (docs/building.md).
+      - name: Current commits of the collections
         run: |
-          mkdir "$RUNNER_TEMP/collections"
-          cd "$RUNNER_TEMP/collections"
-          git clone --depth 1 --quiet https://github.com/pingw33n/rb-songs.git
-          git clone --depth 1 --quiet https://github.com/pingw33n/rb-mods.git
           {
-            echo "SONGS_COMMIT=$(git -C rb-songs rev-parse HEAD)"
-            echo "MODS_COMMIT=$(git -C rb-mods rev-parse HEAD)"
+            echo "SONGS_COMMIT=$(git ls-remote https://github.com/pingw33n/rb-songs.git refs/heads/main | cut -f1)"
+            echo "MODS_COMMIT=$(git ls-remote https://github.com/pingw33n/rb-mods.git refs/heads/main | cut -f1)"
           } | tee -a "$GITHUB_ENV"
+          for v in SONGS_COMMIT MODS_COMMIT; do
+            printf '%s' "${!v}" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::$v is empty or not a commit"; exit 1; }
+          done
+      - name: Part of rb-songs from the cache
+        id: songs-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/web-index/songs.part
+          key: web-index-songs-${{ hashFiles('crates/orb-cli/src/webindex.rs', 'crates/orb-cli/src/info.rs', 'crates/orb-cli/src/mods.rs', 'crates/orb-cli/src/render.rs', 'crates/orb-cli/src/fs.rs', 'crates/orb-cli/src/lib.rs', 'crates/orb-engine/src/**', 'crates/rbs/src/**', 'crates/rbm/src/**', 'Cargo.lock') }}-${{ env.SONGS_COMMIT }}
+      - name: Part of rb-mods from the cache
+        id: mods-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/web-index/mods.part
+          key: web-index-mods-${{ hashFiles('crates/orb-cli/src/webindex.rs', 'crates/orb-cli/src/info.rs', 'crates/orb-cli/src/mods.rs', 'crates/orb-cli/src/render.rs', 'crates/orb-cli/src/fs.rs', 'crates/orb-cli/src/lib.rs', 'crates/orb-engine/src/**', 'crates/rbs/src/**', 'crates/rbm/src/**', 'Cargo.lock') }}-${{ env.MODS_COMMIT }}
       # cpal (orb-player, under orb-cli) links ALSA: the same headers as ci.yml and release.yml.
       - name: Install ALSA
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
       - name: Build orb
         run: cargo build --locked --release -p orb-cli
+      # On a miss: the collection at that commit, shallow (a blobless clone does not help:
+      # `orb web-index` reads every file for its size, hash and mod name), then its part. The
+      # folders are named songs and mods as in the repositories. The clone is checked out at
+      # the commit asked above (a push in between would give a newer one the index must not
+      # pin), and the cache saves the part when the job succeeds.
+      - name: Part of rb-songs from a clone
+        if: steps.songs-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "rb-songs $SONGS_COMMIT: cache miss, cloning"
+          scripts/clone-collection.sh rb-songs "$SONGS_COMMIT" "$RUNNER_TEMP/collections"
+          mkdir -p "$RUNNER_TEMP/web-index"
+          target/release/orb web-index --songs "$RUNNER_TEMP/collections/rb-songs/songs" \
+            --write-songs-part "$RUNNER_TEMP/web-index/songs.part"
+      - name: Part of rb-mods from a clone
+        if: steps.mods-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "rb-mods $MODS_COMMIT: cache miss, cloning"
+          scripts/clone-collection.sh rb-mods "$MODS_COMMIT" "$RUNNER_TEMP/collections"
+          mkdir -p "$RUNNER_TEMP/web-index"
+          target/release/orb web-index --mods "$RUNNER_TEMP/collections/rb-mods/mods" \
+            --write-mods-part "$RUNNER_TEMP/web-index/mods.part"
       - name: Index the collections
-        run: >
-          target/release/orb web-index
-          --songs "$RUNNER_TEMP/collections/rb-songs/songs"
-          --mods "$RUNNER_TEMP/collections/rb-mods/mods"
-          --songs-commit "$SONGS_COMMIT" --mods-commit "$MODS_COMMIT"
-          -o "$RUNNER_TEMP/index.json"
+        env:
+          SONGS_HIT: ${{ steps.songs-cache.outputs.cache-hit }}
+          MODS_HIT: ${{ steps.mods-cache.outputs.cache-hit }}
+        run: |
+          echo "rb-songs $SONGS_COMMIT: $([ "$SONGS_HIT" = true ] && echo 'part from the cache, not cloned' || echo 'cloned, part made')"
+          echo "rb-mods $MODS_COMMIT: $([ "$MODS_HIT" = true ] && echo 'part from the cache, not cloned' || echo 'cloned, part made')"
+          target/release/orb web-index \
+            --songs-part "$RUNNER_TEMP/web-index/songs.part" \
+            --mods-part "$RUNNER_TEMP/web-index/mods.part" \
+            --songs-commit "$SONGS_COMMIT" --mods-commit "$MODS_COMMIT" \
+            -o "$RUNNER_TEMP/index.json"
       - name: Build the web app
         run: scripts/build-web.sh --index "$RUNNER_TEMP/index.json"
       - name: Build the site

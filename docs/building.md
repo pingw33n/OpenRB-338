@@ -1260,18 +1260,39 @@ No framework, no build tool beyond `tools/build_site.py`.
   the `build` job: takes `SOURCE_DATE_EPOCH` and `ORB_BUILD_BRANCH` from `scripts/release-env.sh
   TAG` (so the About box shows the tag's version, `2026.1127.1200`, as the packages do; the
   checkout has the full history for it); installs wasm-bindgen-cli at the version
-  `scripts/build-web.sh` names (`rust-cache` keeps the binary between runs); clones
-  `pingw33n/rb-songs` and `pingw33n/rb-mods` at `--depth 1` into `$RUNNER_TEMP/collections`
-  (a blobless clone is no gain: `orb web-index` reads every file); builds `orb`; runs `orb
-  web-index --songs .../rb-songs/songs --mods .../rb-mods/mods --songs-commit SHA --mods-commit
-  SHA` with the commits that were checked out, so `web/index.json` pins them; runs
+  `scripts/build-web.sh` names (`rust-cache` keeps the binary between runs); asks each
+  collection's current commit with `git ls-remote`; takes each collection's part from the cache
+  or, on a miss, clones it (the next bullet); builds `orb`; runs `orb web-index --songs-part
+  .../songs.part --mods-part .../mods.part --songs-commit SHA --mods-commit SHA` with the
+  commits that were asked, so `web/index.json` pins them; runs
   `scripts/build-web.sh --index`; and passes `dist/web` to `tools/build_site.py --web`. A last
   step fails the run when the site is 400 MiB (409,600 KiB) or more (the Pages limit is 1 GB). The web app is
   built from the commit the run is on (the tag for a published release, `main` for a run by
   hand) with the tag's version.
+- **The collection cache** (task-322). A run clones a collection (rb-mods 1.9 GiB, about 2
+  minutes; rb-songs 150 MB) only when it has no cached part for the collection's current
+  commit. A part is what `orb web-index` derives from one collection alone: `--write-songs-part
+  FILE` (the song rows with their size, SHA-256 and facts, without `mod_variants`) and
+  `--write-mods-part FILE` (the mod rows); `--songs-part` / `--mods-part` take them in place of
+  `--songs` / `--mods`. The song-to-mod resolution (`mod_variants`) is made when the parts are
+  combined, so it is current when only one side came from the cache; `index.json` is byte for
+  byte the full run's over the same commits (`tests/web_index.rs`, `parts_combine_to_the_full_index`).
+  Two `actions/cache` steps (pinned by SHA) hold the parts, each under the key
+  `web-index-songs-HASH-COMMIT` / `web-index-mods-HASH-COMMIT`: COMMIT is the collection's
+  `git ls-remote` head, and HASH is `hashFiles` of `crates/orb-cli/src/webindex.rs` (its
+  `VERSION` is the index format version, and the part code), and in `crates/orb-cli/src` `info.rs`,
+  `mods.rs`, `render.rs` (`read_song`), `fs.rs` and `lib.rs`, then `crates/orb-engine/src` (the
+  song conversion `orb_engine::load`), `crates/rbs/src`, `crates/rbm/src` and `Cargo.lock`, so a change to the format or to
+  what reads the files is a miss for both collections and a new commit is a miss for that
+  one. On a miss `scripts/clone-collection.sh NAME COMMIT DEST` fetches that commit at depth
+  1 (not the head, which a push may have moved) and the part is made from the clone; the cache
+  saves it at the end of a successful job. The "Index the collections" step logs per
+  collection `part from the cache, not cloned` or `cloned, part made`. GitHub deletes a cache
+  entry that was not used for 7 days (and the oldest ones past 10 GB of the repository's
+  caches), so after a quiet week the next run clones once again and fills the cache.
 - **Redeploying after a collection changes:** Actions > pages > Run workflow on `main` (leave
-  `tag` empty for the latest release); the run clones the collections again and writes a new
-  `index.json`. The index is the only thing that changes with the collections, and the deployed
+  `tag` empty for the latest release); the run clones the collection whose commit changed (the
+  other part comes from the cache) and writes a new `index.json`. The index is the only thing that changes with the collections, and the deployed
   page keeps downloading from the commits its index pins until then.
 - **Size of the site (2026-11-27, a local run of the same steps):** 22.0 MiB (22,532 KiB) in all:
   `web/` 20 MiB (`orb_web_bg.wasm` 18.2 MiB, `index.json` 905 KiB for 5804 songs and 326 mods

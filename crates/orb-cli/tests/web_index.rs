@@ -8,6 +8,7 @@
 mod common;
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -297,4 +298,106 @@ fn hidden_from_the_user_help() {
     };
     assert!(!help(&["--help"]).contains("web-index"));
     assert!(help(&["web-index", "--help"]).contains("orb-web-index"));
+}
+
+/// `orb web-index` with the given arguments; its stderr when it fails.
+fn web_index(args: &[&OsStr]) -> Result<(), String> {
+    let o = Command::new(env!("CARGO_BIN_EXE_orb"))
+        .arg("web-index")
+        .args(args)
+        .output()
+        .unwrap();
+    if o.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&o.stderr).into_owned())
+    }
+}
+
+/// task-322: the index combined from the two cached parts is the full run's, byte for byte,
+/// also when only one side changed since its part was made (`mod_variants` is computed at the
+/// combine, from both sides).
+#[test]
+fn parts_combine_to_the_full_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    fixture(d);
+    let p = |n: &str| d.join(n);
+    let combine = |songs: &Path, mods: &Path, out: &Path| {
+        let mut a: Vec<&OsStr> = vec![OsStr::new("--songs-part"), songs.as_os_str()];
+        a.extend([OsStr::new("--mods-part"), mods.as_os_str()]);
+        a.extend([OsStr::new("--songs-commit"), OsStr::new(SONGS_COMMIT)]);
+        a.extend([OsStr::new("--mods-commit"), OsStr::new(MODS_COMMIT)]);
+        a.extend([OsStr::new("-o"), out.as_os_str()]);
+        web_index(&a).unwrap();
+    };
+    let write = |opt: &str, dir: &str, out: &Path| {
+        let flag = format!("--{dir}");
+        web_index(&[
+            OsStr::new(&flag),
+            p(dir).as_os_str(),
+            OsStr::new(opt),
+            out.as_os_str(),
+        ])
+        .unwrap();
+    };
+    let full = |out: &Path| {
+        let o = run(d, out, true);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    let same = |a: &str, b: &str| {
+        assert_eq!(
+            std::fs::read(p(a)).unwrap(),
+            std::fs::read(p(b)).unwrap(),
+            "{a} and {b}"
+        );
+    };
+
+    write("--write-songs-part", "songs", &p("songs.part"));
+    write("--write-mods-part", "mods", &p("mods.part"));
+    full(&p("full.json"));
+    combine(&p("songs.part"), &p("mods.part"), &p("comb.json"));
+    same("full.json", "comb.json");
+
+    // only the mods change: a mod is added that a song names, and the old songs part is reused
+    put(
+        &d.join("mods/AA-std.rbm"),
+        &std::fs::read(standard_mod()).unwrap(),
+    );
+    write("--write-mods-part", "mods", &p("mods2.part"));
+    full(&p("full2.json"));
+    combine(&p("songs.part"), &p("mods2.part"), &p("comb2.json"));
+    same("full2.json", "comb2.json");
+    assert_ne!(
+        std::fs::read(p("full2.json")).unwrap(),
+        std::fs::read(p("full.json")).unwrap()
+    );
+
+    // only the songs change: the old mods part is reused
+    put(&d.join("songs/New.rbs"), &song_naming("Standard ReBirth"));
+    write("--write-songs-part", "songs", &p("songs3.part"));
+    full(&p("full3.json"));
+    combine(&p("songs3.part"), &p("mods2.part"), &p("comb3.json"));
+    same("full3.json", "comb3.json");
+
+    // the folder and the part together, and a part of the wrong kind, are refused
+    assert!(
+        web_index(&[
+            OsStr::new("--songs"),
+            p("songs").as_os_str(),
+            OsStr::new("--songs-part"),
+            p("songs.part").as_os_str(),
+        ])
+        .is_err()
+    );
+    let err = web_index(&[
+        OsStr::new("--songs-part"),
+        p("mods.part").as_os_str(),
+        OsStr::new("--mods-part"),
+        p("mods.part").as_os_str(),
+        OsStr::new("-o"),
+        p("x.json").as_os_str(),
+    ])
+    .unwrap_err();
+    assert!(err.contains("orb-web-index-songs-part"), "{err}");
 }

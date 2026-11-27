@@ -46,13 +46,37 @@ pub const MOD_COLUMNS: [&str; 6] = ["file", "size", "sha256", "name", "recrypted
 /// Where the raw files of a GitHub repository are served (with `Access-Control-Allow-Origin: *`).
 const RAW: &str = "https://raw.githubusercontent.com";
 
+/// Where one collection comes from: its folder, or a part made from it earlier
+/// ([`songs_part`], [`mods_part`]).
+pub enum Source<'a> {
+    Dir(&'a Path),
+    Part(&'a Path),
+}
+
 /// What `orb web-index` is given.
 pub struct Options<'a> {
-    pub songs: &'a Path,
-    pub mods: &'a Path,
+    pub songs: Source<'a>,
+    pub mods: Source<'a>,
     pub songs_commit: Option<&'a str>,
     pub mods_commit: Option<&'a str>,
 }
+
+/// What the index derives from the rb-songs collection alone (task-322): the song rows without
+/// `mod_variants`, which needs the mods, and the folders they index.
+pub struct SongsPart {
+    dirs: Vec<String>,
+    /// The rows of the first `SONG_COLUMNS.len() - 1` columns.
+    rows: Vec<Vec<Value>>,
+}
+
+/// What the index derives from the rb-mods collection alone: the folder's name and the mod rows.
+pub struct ModsPart {
+    dir: String,
+    rows: Vec<Vec<Value>>,
+}
+
+const SONGS_PART: &str = "orb-web-index-songs-part";
+const MODS_PART: &str = "orb-web-index-mods-part";
 
 /// A file of a collection.
 struct Entry {
@@ -134,14 +158,6 @@ fn repo(name: &str, commit: Option<&str>) -> Value {
     })
 }
 
-/// A mod of the index.
-struct ModEntry {
-    /// The file name (the mods are in one folder).
-    file: String,
-    row: Vec<Value>,
-    name: Option<String>,
-}
-
 /// The bytes of a file, or the error text of an entry (a file that cannot be read is listed,
 /// and does not stop the run).
 fn read(path: &Path) -> Result<Vec<u8>, String> {
@@ -156,7 +172,7 @@ fn size_hash(bytes: Option<&[u8]>) -> [Value; 2] {
     ]
 }
 
-fn mod_entry(e: &Entry) -> ModEntry {
+fn mod_row(e: &Entry) -> Vec<Value> {
     let bytes = read(&e.path);
     let [size, sha] = size_hash(bytes.as_deref().ok());
     let (mut name, mut recrypted, mut error) = (None, 0, None);
@@ -168,21 +184,17 @@ fn mod_entry(e: &Entry) -> ModEntry {
         }
         Err(x) => error = Some(x),
     }
-    ModEntry {
-        file: e.file.clone(),
-        row: vec![
-            e.file.clone().into(),
-            size,
-            sha,
-            name.clone().into(),
-            recrypted.into(),
-            error.into(),
-        ],
-        name,
-    }
+    vec![
+        e.file.clone().into(),
+        size,
+        sha,
+        name.into(),
+        recrypted.into(),
+        error.into(),
+    ]
 }
 
-fn song_entry(e: &Entry, dirs: &BTreeSet<&str>, mods: &[ModEntry], order: &[usize]) -> Value {
+fn song_row(e: &Entry, dirs: &BTreeSet<&str>) -> Vec<Value> {
     let bytes = read(&e.path);
     let [size, sha] = size_hash(bytes.as_deref().ok());
     let facts = match bytes {
@@ -195,68 +207,162 @@ fn song_entry(e: &Entry, dirs: &BTreeSet<&str>, mods: &[ModEntry], order: &[usiz
         .expect("a listed folder");
     let mut row: Vec<Value> = vec![dir.into(), e.file.clone().into(), size, sha];
     match facts {
-        Ok(f) => {
-            // the mods whose INFO name is the song's, in orb's order; the built-in kit has none
-            let variants: Vec<usize> = if f.mod_name == STANDARD {
-                Vec::new()
-            } else {
-                order
-                    .iter()
-                    .copied()
-                    .filter(|&i| {
-                        mods[i]
-                            .name
-                            .as_deref()
-                            .is_some_and(|n| mods::names_match(n, &f.mod_name))
-                    })
-                    .collect()
-            };
-            row.extend([
-                Value::Null,
-                if f.rb1x { "rb1x" } else { "rbs" }.into(),
-                f.version.clone().into(),
-                f.window_title.clone().into(),
-                f.mod_name.clone().into(),
-                f.bpm.into(),
-                f.last_event_bar().into(),
-                variants.into(),
-            ]);
-        }
+        Ok(f) => row.extend([
+            Value::Null,
+            if f.rb1x { "rb1x" } else { "rbs" }.into(),
+            f.version.clone().into(),
+            f.window_title.clone().into(),
+            f.mod_name.clone().into(),
+            f.bpm.into(),
+            f.last_event_bar().into(),
+        ]),
         Err(x) => {
             row.push(x.into());
-            row.resize(SONG_COLUMNS.len(), Value::Null);
+            row.resize(SONG_COLUMNS.len() - 1, Value::Null);
         }
     }
-    Value::Array(row)
+    row
 }
 
-/// The index of the two collections, as compact JSON ending in a newline.
-pub fn build(o: &Options) -> Result<String, Fail> {
-    let mod_files = walk(o.mods, "rbm", false)?;
-    let mods: Vec<ModEntry> = mod_files.iter().map(mod_entry).collect();
-    // the lookup order of orb: the bytes of the file name, then the path (one folder here)
-    let mut order: Vec<usize> = (0..mods.len()).collect();
-    order.sort_by(|&a, &b| mods::byte_order(Path::new(&mods[a].file), Path::new(&mods[b].file)));
+/// The part of the mods in the folder `dir`.
+pub fn mods_part(dir: &Path) -> Result<ModsPart, Fail> {
+    let files = walk(dir, "rbm", false)?;
+    Ok(ModsPart {
+        dir: top_name(dir)?,
+        rows: files.iter().map(mod_row).collect(),
+    })
+}
 
-    let song_files = walk(o.songs, "rbs", true)?;
-    let dirs: BTreeSet<&str> = song_files.iter().map(|e| e.dir.as_str()).collect();
-    let songs: Vec<Value> = song_files
-        .iter()
-        .map(|e| song_entry(e, &dirs, &mods, &order))
+/// The part of the songs in the folder `dir` and all the folders below it.
+pub fn songs_part(dir: &Path) -> Result<SongsPart, Fail> {
+    let files = walk(dir, "rbs", true)?;
+    let dirs: BTreeSet<&str> = files.iter().map(|e| e.dir.as_str()).collect();
+    Ok(SongsPart {
+        rows: files.iter().map(|e| song_row(e, &dirs)).collect(),
+        dirs: dirs.into_iter().map(str::to_string).collect(),
+    })
+}
+
+fn part_json(format: &str, key: &str, name: Value, rows: &[Vec<Value>]) -> String {
+    let mut out = serde_json::to_string(&json!({
+        "format": format,
+        "version": VERSION,
+        key: name,
+        "rows": rows,
+    }))
+    .expect("a JSON value serializes");
+    out.push('\n');
+    out
+}
+
+impl SongsPart {
+    /// The part as compact JSON ending in a newline.
+    pub fn to_json(&self) -> String {
+        part_json(SONGS_PART, "song_dirs", json!(self.dirs), &self.rows)
+    }
+}
+
+impl ModsPart {
+    /// The part as compact JSON ending in a newline.
+    pub fn to_json(&self) -> String {
+        part_json(MODS_PART, "mods_dir", json!(self.dir), &self.rows)
+    }
+}
+
+/// A part file: its `key` value and its rows (the version and the format are checked).
+fn read_part(path: &Path, format: &str, key: &str) -> Result<(Value, Vec<Vec<Value>>), Fail> {
+    let bad = |m: &str| fail(1, format!("{}: {m}", path.display()));
+    let bytes = crate::fs::read(path).map_err(|e| bad(&format!("cannot read: {e}")))?;
+    let mut v: Value = serde_json::from_slice(&bytes).map_err(|e| bad(&e.to_string()))?;
+    if v["format"] != format || v["version"] != VERSION {
+        return Err(bad(&format!("not a {format} part of version {VERSION}")));
+    }
+    let rows = serde_json::from_value(v["rows"].take()).map_err(|e| bad(&e.to_string()))?;
+    Ok((v[key].take(), rows))
+}
+
+impl SongsPart {
+    pub fn read(path: &Path) -> Result<Self, Fail> {
+        let (dirs, rows) = read_part(path, SONGS_PART, "song_dirs")?;
+        let dirs = serde_json::from_value(dirs)
+            .map_err(|e| fail(1, format!("{}: {e}", path.display())))?;
+        Ok(Self { dirs, rows })
+    }
+}
+
+impl ModsPart {
+    pub fn read(path: &Path) -> Result<Self, Fail> {
+        let (dir, rows) = read_part(path, MODS_PART, "mods_dir")?;
+        let dir =
+            serde_json::from_value(dir).map_err(|e| fail(1, format!("{}: {e}", path.display())))?;
+        Ok(Self { dir, rows })
+    }
+}
+
+/// The index of the two parts, as compact JSON ending in a newline. `mod_variants` is computed
+/// here, from both parts, so a part made long ago resolves against the mods of today.
+pub fn combine(
+    songs: SongsPart,
+    mods: ModsPart,
+    songs_commit: Option<&str>,
+    mods_commit: Option<&str>,
+) -> String {
+    let names: Vec<Option<&str>> = mods.rows.iter().map(|r| r[3].as_str()).collect();
+    let file = |i: usize| mods.rows[i][0].as_str().unwrap_or("");
+    // the lookup order of orb: the bytes of the file name, then the path (one folder here)
+    let mut order: Vec<usize> = (0..mods.rows.len()).collect();
+    order.sort_by(|&a, &b| mods::byte_order(Path::new(file(a)), Path::new(file(b))));
+    let song_rows: Vec<Value> = songs
+        .rows
+        .into_iter()
+        .map(|mut row| {
+            let variants = if row[4].is_null() {
+                let mod_name = row[8].as_str().unwrap_or("");
+                // the mods whose INFO name is the song's, in orb's order; the built-in kit has
+                // none
+                let v: Vec<usize> = if mod_name == STANDARD {
+                    Vec::new()
+                } else {
+                    order
+                        .iter()
+                        .copied()
+                        .filter(|&i| names[i].is_some_and(|n| mods::names_match(n, mod_name)))
+                        .collect()
+                };
+                v.into()
+            } else {
+                Value::Null
+            };
+            row.push(variants);
+            Value::Array(row)
+        })
         .collect();
     let index = json!({
         "format": "orb-web-index",
         "version": VERSION,
-        "songs_repo": repo("rb-songs", o.songs_commit),
-        "mods_repo": repo("rb-mods", o.mods_commit),
-        "mods_dir": top_name(o.mods)?,
-        "song_dirs": dirs,
+        "songs_repo": repo("rb-songs", songs_commit),
+        "mods_repo": repo("rb-mods", mods_commit),
+        "mods_dir": mods.dir,
+        "song_dirs": songs.dirs,
         "song_columns": SONG_COLUMNS,
-        "songs": songs,
+        "songs": song_rows,
         "mod_columns": MOD_COLUMNS,
-        "mods": mods.into_iter().map(|m| Value::Array(m.row)).collect::<Vec<_>>(),
+        "mods": mods.rows,
     });
     let mut out = serde_json::to_string(&index).expect("a JSON value serializes");
     out.push('\n');
-    Ok(out)
+    out
+}
+
+/// The index of the two collections, each from its folder or from a part.
+pub fn build(o: &Options) -> Result<String, Fail> {
+    let mods = match o.mods {
+        Source::Dir(d) => mods_part(d)?,
+        Source::Part(p) => ModsPart::read(p)?,
+    };
+    let songs = match o.songs {
+        Source::Dir(d) => songs_part(d)?,
+        Source::Part(p) => SongsPart::read(p)?,
+    };
+    Ok(combine(songs, mods, o.songs_commit, o.mods_commit))
 }
