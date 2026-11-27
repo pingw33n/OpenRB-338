@@ -5,6 +5,7 @@ status: To Do
 assignee:
   - '@agent-worker'
 created_date: '2026-11-27T15:41:00Z'
+updated_date: '2026-11-27T15:46:00Z'
 labels:
   - ui
 milestone: m-6
@@ -36,7 +37,16 @@ Why: three requests from the user (2026-11-27) for the web page (/OpenRB-338/web
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 The web page's icons are the landing page's files and tags and look the same in the tab (checked in a browser)
-- [ ] #2 The web page's title is '<song> - OpenRB-338' (with ' *' when modified); the native window title is unchanged
-- [ ] #3 File > Open Collection (Random) and Cmd/Ctrl+Alt+O open a random openable collection song through the normal open path; Cmd+O and Cmd+Shift+O are unaffected (tests for the selection and the shortcut distinction)
-- [ ] #4 The browser check of the shortcut (Chrome; Firefox and Safari by the user) and docs/ui_spec.md section 26 / docs/web.md are updated
+- [ ] #2 File > Open Collection (Random) and Cmd/Ctrl+Alt+O open a random openable collection song through the normal open path; Cmd+O and Cmd+Shift+O are unaffected (tests for the selection and the shortcut distinction)
+- [ ] #3 The browser check of the shortcut (Chrome; Firefox and Safari by the user) and docs/ui_spec.md section 26 / docs/web.md are updated
+- [ ] #4 The web page's title is '<song> - OpenRB-338', or '<song>* - OpenRB-338' when modified; the native window title is unchanged
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-27, the user (relayed by the supervisor), overriding the description:
+- Title format: "<song>* - OpenRB-338" when modified (the mark right after the name, no space), "<song> - OpenRB-338" otherwise.
+- Shortcut: if Cmd+Option+O / Ctrl+Alt+O has any problem (Option typing a character on macOS, AltGr on Windows layouts, a browser binding), do not document a limitation: pick another shortcut that works in Chrome, Firefox and Safari on macOS and on Windows/Linux, avoiding browser-reserved keys (e.g. Cmd/Ctrl+Shift+R is a hard reload), and record the choice and why in the notes and docs.
+- "Can open" means what the index already says at deploy time, with no download: the song row has no read error (orb web-index read and parsed it), and its mod resolves (the built-in kit, or a non-empty mod_variants), or, with a local mods folder in use, that folder's lookup finds the mod.
+<!-- SECTION:NOTES:END -->
