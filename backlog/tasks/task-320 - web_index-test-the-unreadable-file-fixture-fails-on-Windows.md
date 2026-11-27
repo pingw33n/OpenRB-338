@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@agent-chore'
 created_date: '2026-11-27T12:58:00Z'
-updated_date: '2026-11-27T13:57:00Z'
+updated_date: '2026-11-27T14:40:00Z'
 labels:
   - tests
   - cli
@@ -32,7 +32,7 @@ Fix: in `unreadable()`, when the file is still readable after the chmod attempt,
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 cargo test -p orb-cli --test web_index passes on macOS, and the fixture removes the locked files when they stay readable (the Windows and root case)
-- [ ] #2 CI's windows-latest clippy and test job passes after the push (the supervisor checks)
+- [x] #2 CI's windows-latest clippy and test job passes after the push (the supervisor checks)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -54,6 +54,8 @@ Run 1 (macOS, chmod 0 active): cargo test -p orb-cli --test web_index -> 2 passe
 Run 2 (Windows simulation): the cfg(unix) block in unreadable() replaced by cfg(any()) so the chmod is skipped (the file is readable, as on Windows and as root). cargo test -p orb-cli --test web_index -> 2 passed, 0 failed. The read succeeds, so the fixture removes the file and returns false, and the expectations drop locked.rbs and locked.rbm. The file was then restored; git diff shows only the fix below.
 Lint and format: cargo clippy -p orb-cli --all-targets -- -D warnings -> exit 0. cargo +nightly fmt --all --check -> exit 0.
 The fix (crates/orb-cli/tests/web_index.rs, unreadable()): after the cfg(unix) chmod block, if std::fs::read(path) is still Ok, remove_file(path).unwrap() and return false; otherwise return true. The doc comment and fixture()/expectations are unchanged.
+
+2026-11-27, supervisor: CI run 46016285677 on main 39c599d passed on every job, windows-latest clippy and test included (web_index passes there).
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
