@@ -7,7 +7,7 @@ status: To Do
 assignee:
   - '@agent-complex'
 created_date: 2026-11-03 09:17
-updated_date: '2026-11-27T10:12:00Z'
+updated_date: '2026-11-27T10:15:00Z'
 labels:
   - ui
 milestone: m-6
@@ -53,4 +53,6 @@ What to build:
 <!-- SECTION:NOTES:BEGIN -->
 2026-11-27, the user (relayed by the supervisor): the web version keeps a single File > Open, like the desktop app. task-172 makes File > Open and Cmd/Ctrl+O open the in-app file browser, with a place "This computer…" that opens the browser's file picker. This task adds a "Song collection" place (and a "Mod collection" place to the mods dialog) to that same dialog; no separate "Open from Collection" command.
 Counts in the description are out of date: rb-songs now has 5,685 songs and rb-mods 326 mods, about 1 GB (tests/refs/thirdparty_*.json, 2026-11-26).
+
+Correction, 2026-11-27, the user (relayed by the supervisor), replacing the note above: two entry points, not one dialog. File > Open Local… (and Cmd/Ctrl+O) opens the browser's file picker directly (task-172). This task adds a separate "Open Collection" command that opens the in-app browser on the song collection; the mods side gets the collection's mods in the Mods menu and its dialog. Local folders: the mods folder is Mods > Choose Mods Folder… (task-172, read lazily); there is no local songs folder on the web (the browser's picker remembers its last folder).
 <!-- SECTION:NOTES:END -->
