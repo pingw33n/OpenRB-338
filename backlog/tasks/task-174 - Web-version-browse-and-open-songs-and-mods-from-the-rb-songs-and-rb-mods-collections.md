@@ -7,7 +7,7 @@ status: To Do
 assignee:
   - '@agent-complex'
 created_date: 2026-11-03 09:17
-updated_date: '2026-11-27T10:15:00Z'
+updated_date: '2026-11-27T10:18:00Z'
 labels:
   - ui
 milestone: m-6
@@ -55,4 +55,6 @@ What to build:
 Counts in the description are out of date: rb-songs now has 5,685 songs and rb-mods 326 mods, about 1 GB (tests/refs/thirdparty_*.json, 2026-11-26).
 
 Correction, 2026-11-27, the user (relayed by the supervisor), replacing the note above: two entry points, not one dialog. File > Open Local… (and Cmd/Ctrl+O) opens the browser's file picker directly (task-172). This task adds a separate "Open Collection" command that opens the in-app browser on the song collection; the mods side gets the collection's mods in the Mods menu and its dialog. Local folders: the mods folder is Mods > Choose Mods Folder… (task-172, read lazily); there is no local songs folder on the web (the browser's picker remembers its last folder).
+
+2026-11-27, the user: on page load the mods source is the rb-mods collection; Mods > Choose Mods Folder… replaces it with a local folder for that session only (not remembered across visits). No songs folder on the web.
 <!-- SECTION:NOTES:END -->
