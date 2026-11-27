@@ -3,12 +3,14 @@
 //!
 //! What the browser gives the page instead of the desktop's:
 //! - **Files.** The page sees no folders of the computer. The songs and mods it reads are those the
-//!   user picked ([`pick`]: File > Open Local..., the Mods menu's Choose file... and Choose Mods
+//!   user picked ([`pick`]: File > Open..., the Mods menu's Choose File... and Choose Mods
 //!   Folder...) or dropped onto the page ([`App::web_dropped`]), held in memory for the session
 //!   (`orb_cli::fs`: [`SONGS_DIR`] for songs and single mods, [`MODS_DIR`] for the picked mods
-//!   folder). Save As and Export ask the browser where to write ([`pick_save`]: its own save
-//!   picker, `showSaveFilePicker`, where it has one, else a download named after the song); there
-//!   is no in-app save dialog on the web.
+//!   folder). The rb-songs and rb-mods collections are files of the memory file system too
+//!   ([`crate::collection`]: `/rb-songs/...`, `/rb-mods/...`), listed from the page's `index.json`
+//!   and downloaded when used ([`App::web_load_then`], task-174). Save As and Export ask the
+//!   browser where to write ([`pick_save`]: its own save picker, `showSaveFilePicker`, where it has
+//!   one, else a download named after the song); there is no in-app save dialog on the web.
 //! - **Settings** in `localStorage`, under the key `/OpenRB-338/OpenRB-338.toml`, the same TOML
 //!   text as the native file (`settings.rs`, task-170).
 //! - **Audio** in an AudioWorklet ([`orb_player::web::WebOutput`] and
@@ -223,7 +225,7 @@ fn loaded() {
 pub enum Pick {
     /// File > Open: one song.
     Song,
-    /// Mods > Choose file...: one mod.
+    /// Mods > Choose File...: one mod.
     Mod,
     /// Mods > Choose Mods Folder...: a folder, whose mods become the Mods folder.
     ModsFolder,
@@ -276,6 +278,9 @@ impl SaveTarget {
 #[derive(Clone, Debug)]
 pub enum Picked {
     Song(PathBuf),
+    /// A song whose unsaved-changes question was answered, once it and its mod are read
+    /// (`App::web_fetch_and_open`).
+    OpenNow(PathBuf),
     Mod(PathBuf),
     /// The folder and the number of mods (`.rbm` files) in it.
     ModsFolder(PathBuf, usize),
@@ -285,6 +290,8 @@ pub enum Picked {
     Command(crate::menu::Cmd),
     /// What the status line shows while a picked folder is checked.
     Status(String),
+    /// The collection index was read (the numbers of songs and mods) or not (task-174).
+    Collection(Result<(usize, usize), String>),
     /// Where the browser's save picker (or the download fallback) says to write.
     SaveTo(SaveFor, SaveTarget),
     /// The save picker was closed without a choice.
@@ -351,8 +358,9 @@ pub fn state() -> String {
     });
     let frame = STATE.with_borrow(|s| s.clone());
     format!(
-        "{{{},{}}}",
+        "{{{},{},{}}}",
         ctx.unwrap_or_else(|| "\"context\":null".into()),
+        collection_state(),
         if frame.is_empty() {
             "\"frames\":null".into()
         } else {
@@ -452,9 +460,18 @@ async fn bytes_of(f: &web_sys::File) -> Result<Vec<u8>, String> {
     Ok(js_sys::Uint8Array::new(&buf).to_vec())
 }
 
+/// Where the bytes of a lazy file (`orb_cli::fs::insert_lazy`) come from.
+#[derive(Clone, Debug)]
+enum Source {
+    /// A mod of a picked mods folder: the browser's handle of the file.
+    Picked(web_sys::File),
+    /// A file of the rb-songs or rb-mods collection: downloaded and checked (task-174).
+    Remote(crate::collection::File),
+}
+
 thread_local! {
-    /// The browser's handles of the mods not read yet (`orb_cli::fs::insert_lazy`), by path.
-    static LAZY: RefCell<std::collections::HashMap<PathBuf, web_sys::File>> =
+    /// The sources of the files not read yet (`orb_cli::fs::insert_lazy`), by path.
+    static LAZY: RefCell<std::collections::HashMap<PathBuf, Source>> =
         RefCell::new(std::collections::HashMap::new());
 }
 
@@ -563,7 +580,7 @@ async fn read_picked(kind: Pick, files: Vec<web_sys::File>) -> Result<Picked, St
                         };
                         let info = mod_info_of(&f).await;
                         orb_cli::fs::insert_lazy(&path, f.size() as u64, info);
-                        LAZY.with_borrow_mut(|l| l.insert(path, f));
+                        LAZY.with_borrow_mut(|l| l.insert(path, Source::Picked(f)));
                         done.set(done.get() + 1);
                         if done.get() % 16 == 0 {
                             picked(Picked::Status(format!(
@@ -831,7 +848,13 @@ pub async fn start(canvas: web_sys::HtmlCanvasElement, worklet_url: &str) -> Res
     let debug_panic = window()
         .and_then(|w| w.location().search().ok())
         .is_some_and(|q| q.split(['?', '&']).any(|p| p == "debug-panic"));
-    let settings = crate::settings::Settings::load();
+    let mut settings = crate::settings::Settings::load();
+    // the mods source of a page load is the mod collection (the user's decision of
+    // 2026-11-27): a picked mods folder is for its session only, and the collection's mods
+    // join the folder when the index is read (`load_index`)
+    let _ = orb_cli::fs::create_dir_all(Path::new(COLLECTION_MODS));
+    settings.mods_dir = Some(PathBuf::from(COLLECTION_MODS));
+    load_index();
     loading("Starting the audio", None);
     let out = orb_player::web::WebOutput::start(worklet_url).await?;
     loading("Drawing the panel", None);
@@ -935,26 +958,52 @@ impl crate::app::App {
         }
     }
 
-    /// Opens the song at `path` (picked or dropped); when its mod is in the picked mods folder
-    /// and not read yet, the mod is read first (`web_load_then`).
+    /// Opens the song at `path` (picked, dropped or of the song collection); a song of the
+    /// collection is downloaded first, and when its mod is not read yet (a mod of the picked
+    /// mods folder or of the mod collection), the mod is read first (`web_load_then`).
+    /// The unsaved-changes prompt comes first, as natively, so a cancel downloads nothing.
     pub fn web_open_song(&mut self, path: &Path) {
+        if self.asks_to_save() {
+            self.prompt = Some(crate::menu::Then::Open(path.to_path_buf()));
+        } else {
+            self.web_fetch_and_open(path);
+        }
+    }
+
+    /// Opens the song at `path` without asking (the prompt was answered, or there are no
+    /// unsaved changes): a song of the collection is downloaded first, then its mod when it is
+    /// not read yet, each a frame later (`Picked::OpenNow`).
+    pub fn web_fetch_and_open(&mut self, path: &Path) {
+        if orb_cli::fs::is_lazy(path) {
+            self.web_load_then(path.to_path_buf(), Picked::OpenNow(path.to_path_buf()));
+            return;
+        }
         let lazy = crate::session::open_song(path)
             .ok()
             .filter(|o| o.engine.mod_name != orb_cli::mods::STANDARD)
             .and_then(|o| self.resolve_mod_file(&o.engine.mod_name).ok().flatten())
             .filter(|m| orb_cli::fs::is_lazy(m));
         match lazy {
-            Some(m) => self.web_load_then(m, Picked::Song(path.to_path_buf())),
-            None => self.open_song(path),
+            Some(m) => self.web_load_then(m, Picked::OpenNow(path.to_path_buf())),
+            None => self.open_now(path),
         }
     }
 
-    /// Reads the mod `path` of the picked mods folder from the computer into the memory file
-    /// system, then acts on `then` (a frame later: the browser reads files asynchronously).
+    /// Reads the lazy file `path` into the memory file system, then acts on `then` (a frame
+    /// later: the browser reads files asynchronously): a mod of the picked mods folder from the
+    /// computer, a file of a collection from its server ([`fetch_into`], with the download
+    /// dialog).
     pub fn web_load_then(&mut self, path: PathBuf, then: Picked) {
-        let Some(f) = LAZY.with_borrow(|l| l.get(&path).cloned()) else {
-            self.fail(format!("{}: the picked file is gone", file_name(&path)));
-            return;
+        let f = match LAZY.with_borrow(|l| l.get(&path).cloned()) {
+            Some(Source::Picked(f)) => f,
+            Some(Source::Remote(file)) => {
+                fetch_into(path, file, then);
+                return;
+            }
+            None => {
+                self.fail(format!("{}: the picked file is gone", file_name(&path)));
+                return;
+            }
         };
         self.status = Some(format!("Reading {} ...", file_name(&path)));
         wasm_bindgen_futures::spawn_local(async move {
@@ -983,8 +1032,10 @@ impl crate::app::App {
         }
         match p {
             Picked::Song(path) => self.web_open_song(&path),
+            Picked::OpenNow(path) => self.web_fetch_and_open(&path),
             Picked::Command(cmd) => self.command(cmd),
             Picked::Status(s) => self.status = Some(s),
+            Picked::Collection(r) => self.web_collection_read(r),
             Picked::Mod(path) => match crate::browser::ModStatus::of(&path) {
                 crate::browser::ModStatus::Ready => self.use_kit(orb_cli::mods::Kit::Mod(path)),
                 crate::browser::ModStatus::NeedsRecrypt => self.fail(format!(
@@ -1053,6 +1104,528 @@ impl crate::app::App {
             _ => self.fail(format!(
                 "{name}: only songs (.rbs) and mods (.rbm) can be dropped here"
             )),
+        }
+    }
+}
+
+// ---- the collections (task-174) --------------------------------------------------------------
+
+/// The mod collection's folder in memory: the Mods folder of a page load.
+pub const COLLECTION_MODS: &str = crate::collection::MODS_FOLDER;
+/// The song collection's folder in memory: where File > Open Collection... starts.
+pub const COLLECTION_SONGS: &str = crate::collection::SONGS_FOLDER;
+/// The index of the collections, next to the page (`scripts/build-web.sh --index`).
+const INDEX_URL: &str = "index.json";
+/// The page's download cache (the Cache API), keyed by a file's SHA-256.
+const CACHE_NAME: &str = "orb-collection";
+
+/// Where the collection index is.
+#[derive(Clone, Debug)]
+enum CollectionState {
+    Loading,
+    /// Read: the numbers of songs and mods entered.
+    Ready(usize, usize),
+    Failed(String),
+}
+
+/// A download of a collection file: what the download dialog shows.
+#[derive(Clone, Debug)]
+struct Download {
+    /// Its number: a result of a download that was cancelled or replaced is dropped.
+    serial: u64,
+    name: String,
+    done: u64,
+    total: u64,
+    /// Why it failed: the dialog shows it until it is closed.
+    error: Option<String>,
+    abort: Option<web_sys::AbortController>,
+}
+
+thread_local! {
+    static COLLECTION: RefCell<CollectionState> = const { RefCell::new(CollectionState::Loading) };
+    static DOWNLOAD: RefCell<Option<Download>> = const { RefCell::new(None) };
+    static SERIAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// For the checks ([`state`]): files taken from the cache, files downloaded, downloads
+    /// cancelled.
+    static COUNTS: std::cell::Cell<(u32, u32, u32)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+/// The collections' part of [`state`].
+fn collection_state() -> String {
+    let c = COLLECTION.with_borrow(|c| match c {
+        CollectionState::Loading => "\"loading\"".to_string(),
+        CollectionState::Ready(s, m) => format!("{{\"songs\":{s},\"mods\":{m}}}"),
+        CollectionState::Failed(e) => format!("{{\"error\":{e:?}}}"),
+    });
+    let d = DOWNLOAD.with_borrow(|d| match d {
+        None => "null".to_string(),
+        Some(d) => format!(
+            "{{\"name\":{:?},\"done\":{},\"total\":{},\"error\":{}}}",
+            d.name,
+            d.done,
+            d.total,
+            d.error
+                .as_ref()
+                .map_or_else(|| "null".into(), |e| format!("{e:?}"))
+        ),
+    });
+    let (hits, fetched, cancelled) = COUNTS.get();
+    format!(
+        concat!(
+            "\"collection\":{},\"download\":{},\"cacheHits\":{},\"downloaded\":{},",
+            "\"cancelled\":{}"
+        ),
+        c, d, hits, fetched, cancelled
+    )
+}
+
+fn repaint() {
+    CTX.with_borrow(|c| {
+        if let Some(c) = c {
+            c.request_repaint();
+        }
+    });
+}
+
+/// Fetches the collection index next to the page and enters its files into the memory file
+/// system as lazy files (each song, each mod with its INFO name), whose bytes are downloaded
+/// when used; the result arrives as [`Picked::Collection`].
+fn load_index() {
+    COLLECTION.with_borrow_mut(|c| *c = CollectionState::Loading);
+    wasm_bindgen_futures::spawn_local(async {
+        let r = async {
+            let w = window().ok_or("no window")?;
+            let init = web_sys::RequestInit::new();
+            // the index changes with a deploy: asked again, the server answers 304 when it
+            // did not
+            init.set_cache(web_sys::RequestCache::NoCache);
+            let resp =
+                wasm_bindgen_futures::JsFuture::from(w.fetch_with_str_and_init(INDEX_URL, &init))
+                    .await
+                    .map_err(|e| format!("cannot download {INDEX_URL}: {}", js_text(e)))?;
+            let resp: web_sys::Response = resp.dyn_into().map_err(|_| "not a response")?;
+            if !resp.ok() {
+                return Err(format!("{INDEX_URL}: HTTP {}", resp.status()));
+            }
+            let text = wasm_bindgen_futures::JsFuture::from(resp.text().map_err(js_text)?)
+                .await
+                .map_err(js_text)?
+                .as_string()
+                .unwrap_or_default();
+            let index =
+                crate::collection::Index::parse(&text).map_err(|e| format!("{INDEX_URL}: {e}"))?;
+            Ok::<_, String>(enter_index(&index))
+        }
+        .await;
+        COLLECTION.with_borrow_mut(|c| {
+            *c = match &r {
+                Ok((s, m)) => CollectionState::Ready(*s, *m),
+                Err(e) => CollectionState::Failed(e.clone()),
+            }
+        });
+        if let Err(e) = &r {
+            web_sys::console::warn_1(&format!("OpenRB-338: the collections: {e}").into());
+        }
+        picked(Picked::Collection(r));
+    });
+}
+
+/// Enters the files of `index` (those it has a hash of) as lazy files; the numbers of songs
+/// and mods entered.
+fn enter_index(index: &crate::collection::Index) -> (usize, usize) {
+    let mut n = (0, 0);
+    LAZY.with_borrow_mut(|l| {
+        for s in &index.songs {
+            if let (Some(size), Some(_)) = (s.file.size, s.file.sha256) {
+                let p = s.file.mem_path();
+                orb_cli::fs::insert_lazy(&p, size, None);
+                l.insert(p, Source::Remote(s.file.clone()));
+                n.0 += 1;
+            }
+        }
+        for m in &index.mods {
+            if let (Some(size), Some(_)) = (m.file.size, m.file.sha256) {
+                let p = m.file.mem_path();
+                // the INFO name is what the Mods menu and the lookup need; the rest of the INFO
+                // is read with the mod
+                let info = m.name.clone().map(|name| rbm::Info {
+                    text: String::new(),
+                    ftp: String::new(),
+                    web: String::new(),
+                    name,
+                    version: None,
+                });
+                orb_cli::fs::insert_lazy(&p, size, info);
+                l.insert(p, Source::Remote(m.file.clone()));
+                n.1 += 1;
+            }
+        }
+    });
+    n
+}
+
+/// The browser's download cache, if it has one (the Cache API: secure contexts only).
+async fn open_cache() -> Option<JsValue> {
+    let caches = js_sys::Reflect::get(&window()?.into(), &"caches".into()).ok()?;
+    if caches.is_undefined() || caches.is_null() {
+        return None;
+    }
+    call_await(&caches, "open", &js_sys::Array::of1(&CACHE_NAME.into()))
+        .await
+        .ok()
+}
+
+/// The download of `serial` is still the one shown.
+fn current(serial: u64) -> bool {
+    DOWNLOAD.with_borrow(|d| d.as_ref().is_some_and(|d| d.serial == serial))
+}
+
+fn progress(serial: u64, done: u64) {
+    DOWNLOAD.with_borrow_mut(|d| {
+        if let Some(d) = d.as_mut().filter(|d| d.serial == serial) {
+            d.done = done;
+        }
+    });
+    repaint();
+}
+
+/// The bytes of the collection file `file`: from the cache when it holds them (checked again),
+/// else downloaded from the file's raw URL, checked against the index and put into the cache.
+/// The download's progress goes to the dialog; an error says what went wrong.
+async fn fetch_file(file: &crate::collection::File, serial: u64) -> Result<Vec<u8>, String> {
+    let name = file.name().to_string();
+    let key = file
+        .key()
+        .map(|k| format!("orb-cache/sha256/{k}"))
+        .ok_or_else(|| format!("{name}: the collection index has no hash of it"))?;
+    let cache = open_cache().await;
+    if let Some(c) = &cache
+        && let Ok(r) = call_await(c, "match", &js_sys::Array::of1(&key.clone().into())).await
+        && let Ok(r) = r.dyn_into::<web_sys::Response>()
+        && let Ok(p) = r.array_buffer()
+        && let Ok(buf) = wasm_bindgen_futures::JsFuture::from(p).await
+    {
+        let bytes = js_sys::Uint8Array::new(&buf).to_vec();
+        if file.check(&bytes).is_ok() {
+            COUNTS.set({
+                let (h, f, c) = COUNTS.get();
+                (h + 1, f, c)
+            });
+            // a hit is a use (the least recently used are evicted first)
+            let evicted = lru(|l| l.admit(&key, bytes.len() as u64, crate::collection::CACHE_CAP));
+            evict(c, evicted.unwrap_or_default()).await;
+            return Ok(bytes);
+        }
+        lru(|l| l.forget(&key));
+        let _ = call_await(c, "delete", &js_sys::Array::of1(&key.clone().into())).await;
+    }
+    let url = file
+        .url()
+        .ok_or_else(|| format!("{name}: the collection index has no commit to download from"))?;
+    let w = window().ok_or("no window")?;
+    let ctrl = web_sys::AbortController::new().map_err(js_text)?;
+    DOWNLOAD.with_borrow_mut(|d| {
+        if let Some(d) = d.as_mut().filter(|d| d.serial == serial) {
+            d.abort = Some(ctrl.clone());
+        }
+    });
+    let init = web_sys::RequestInit::new();
+    init.set_signal(Some(&ctrl.signal()));
+    let failed = |e: JsValue| {
+        let offline = !w.navigator().on_line();
+        format!(
+            "{name}: the download failed{}: {}",
+            if offline {
+                " (the browser is offline)"
+            } else {
+                " (no connection to the server?)"
+            },
+            js_text(e)
+        )
+    };
+    let resp = wasm_bindgen_futures::JsFuture::from(w.fetch_with_str_and_init(&url, &init))
+        .await
+        .map_err(failed)?;
+    let resp: web_sys::Response = resp.dyn_into().map_err(|_| "not a response")?;
+    if !resp.ok() {
+        return Err(match resp.status() {
+            404 => format!(
+                "{name}: the server has no such file (HTTP 404). The collection may have changed \
+                 since this page was built: reload the page."
+            ),
+            s => format!(
+                "{name}: the server answered HTTP {s} {}",
+                resp.status_text()
+            ),
+        });
+    }
+    let mut bytes = Vec::with_capacity(file.size.unwrap_or(0) as usize);
+    match resp.body() {
+        Some(body) => {
+            let reader: web_sys::ReadableStreamDefaultReader = body.get_reader().unchecked_into();
+            loop {
+                let chunk = wasm_bindgen_futures::JsFuture::from(reader.read())
+                    .await
+                    .map_err(failed)?;
+                let done = js_sys::Reflect::get(&chunk, &"done".into())
+                    .ok()
+                    .is_some_and(|d| d.is_truthy());
+                if done {
+                    break;
+                }
+                if let Ok(v) = js_sys::Reflect::get(&chunk, &"value".into()) {
+                    bytes.extend(js_sys::Uint8Array::new(&v).to_vec());
+                }
+                if !current(serial) {
+                    return Err(format!("{name}: cancelled"));
+                }
+                progress(serial, bytes.len() as u64);
+            }
+        }
+        None => {
+            let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(js_text)?)
+                .await
+                .map_err(failed)?;
+            bytes = js_sys::Uint8Array::new(&buf).to_vec();
+        }
+    }
+    file.check(&bytes)?;
+    COUNTS.set({
+        let (h, f, c) = COUNTS.get();
+        (h, f + 1, c)
+    });
+    // stored within the cap, the least recently used evicted first; a file larger than the cap
+    // is not stored. A failed write (the quota) is like any cache failure: the file opens from
+    // memory, with no error shown
+    if let Some(c) = &cache
+        && let Some(evicted) =
+            lru(|l| l.admit(&key, bytes.len() as u64, crate::collection::CACHE_CAP))
+    {
+        evict(c, evicted).await;
+        let Ok(r) = web_sys::Response::new_with_opt_u8_array(Some(&mut bytes.clone())) else {
+            lru(|l| l.forget(&key));
+            return Ok(bytes);
+        };
+        let args = js_sys::Array::of2(&key.clone().into(), &r);
+        if let Err(e) = call_await(c, "put", &args).await {
+            web_sys::console::warn_1(&e);
+            lru(|l| l.forget(&key));
+        }
+    }
+    Ok(bytes)
+}
+
+/// The `localStorage` key of the download cache's record ([`crate::collection::CacheLru`]).
+const LRU_KEY: &str = "/OpenRB-338/cache-lru.json";
+
+/// Runs `f` on the download cache's record, read from and written back to `localStorage` (no
+/// await between, so two downloads never interleave on it).
+fn lru<T>(f: impl FnOnce(&mut crate::collection::CacheLru) -> T) -> T {
+    let mut l = crate::collection::CacheLru::parse(&storage_get(LRU_KEY).unwrap_or_default());
+    let r = f(&mut l);
+    if let Err(e) = storage_set(LRU_KEY, &l.to_text()) {
+        web_sys::console::warn_1(&format!("OpenRB-338: the cache record: {e}").into());
+    }
+    r
+}
+
+/// Deletes the `keys` from the cache `c`.
+async fn evict(c: &JsValue, keys: Vec<String>) {
+    for k in keys {
+        let _ = call_await(c, "delete", &js_sys::Array::of1(&k.into())).await;
+    }
+}
+
+/// Downloads the collection file `file` into the memory file system at `path`, with the
+/// download dialog ([`App::web_download_ui`]), then acts on `then`. A download that runs is
+/// replaced. A failure stays in the dialog until it is closed; nothing else changes (the song
+/// that plays plays on).
+fn fetch_into(path: PathBuf, file: crate::collection::File, then: Picked) {
+    cancel_download(false);
+    let serial = SERIAL.get() + 1;
+    SERIAL.set(serial);
+    DOWNLOAD.with_borrow_mut(|d| {
+        *d = Some(Download {
+            serial,
+            name: file.name().to_string(),
+            done: 0,
+            total: file.size.unwrap_or(0),
+            error: None,
+            abort: None,
+        })
+    });
+    repaint();
+    wasm_bindgen_futures::spawn_local(async move {
+        let r = fetch_file(&file, serial).await;
+        if !current(serial) {
+            // cancelled or replaced: the result is dropped
+            return;
+        }
+        match r.and_then(|b| {
+            orb_cli::fs::write(&path, &b).map_err(|e| format!("{}: {e}", path.display()))
+        }) {
+            Ok(()) => {
+                LAZY.with_borrow_mut(|l| l.remove(&path));
+                DOWNLOAD.with_borrow_mut(|d| *d = None);
+                picked(then);
+            }
+            Err(e) => {
+                DOWNLOAD.with_borrow_mut(|d| {
+                    if let Some(d) = d.as_mut() {
+                        d.error = Some(e);
+                        d.abort = None;
+                    }
+                });
+                repaint();
+            }
+        }
+    });
+}
+
+/// Stops the download that runs, if any, and closes its dialog; `by_user`: the status line
+/// says so.
+fn cancel_download(by_user: bool) {
+    let Some(d) = DOWNLOAD.with_borrow_mut(|d| d.take()) else {
+        return;
+    };
+    if let Some(a) = &d.abort {
+        a.abort();
+    }
+    if by_user && d.error.is_none() {
+        COUNTS.set({
+            let (h, f, c) = COUNTS.get();
+            (h, f, c + 1)
+        });
+        picked(Picked::Status(format!(
+            "The download of {} was cancelled",
+            d.name
+        )));
+    }
+}
+
+/// Whether the download dialog is shown (the panel takes no input meanwhile).
+pub fn download_shown() -> bool {
+    DOWNLOAD.with_borrow(|d| d.is_some())
+}
+
+impl crate::app::App {
+    /// The collection index was read (or not): the Mods menu lists the mod collection when it
+    /// is the Mods folder.
+    fn web_collection_read(&mut self, r: Result<(usize, usize), String>) {
+        if r.is_ok() && self.settings.mods_dir.as_deref() == Some(Path::new(COLLECTION_MODS)) {
+            self.refresh_mods();
+        }
+    }
+
+    /// File > Open Collection...: the in-app browser on the song collection, in the folder of
+    /// the last song chosen there. While the index loads, or when it could not be read, a
+    /// message says so (and a failed index is asked for again).
+    pub fn web_open_collection(&mut self) {
+        match COLLECTION.with_borrow(|c| c.clone()) {
+            CollectionState::Ready(..) => {
+                let dir = self
+                    .settings
+                    .last_song_dir
+                    .clone()
+                    .filter(|d| d.starts_with(COLLECTION_SONGS) && orb_cli::fs::is_dir(d))
+                    .unwrap_or_else(|| PathBuf::from(COLLECTION_SONGS));
+                self.open_browser_in(crate::browser::Mode::OpenSong, &dir);
+            }
+            CollectionState::Loading => {
+                self.status =
+                    Some("The collection index is still loading; try again in a moment".into())
+            }
+            CollectionState::Failed(e) => {
+                self.fail(format!("The collection is not available: {e}"));
+                load_index();
+            }
+        }
+    }
+
+    /// Mods > Use Collection checked again (task-174, the user's review of 2026-11-27): the Mods
+    /// folder is the mod collection again; the picked folder is no longer used (its files stay
+    /// in memory: the song may play one of its mods). The Mods menu is read again.
+    pub fn web_use_collection(&mut self) {
+        let _ = orb_cli::fs::create_dir_all(Path::new(COLLECTION_MODS));
+        self.settings
+            .set_mods_dir(Some(PathBuf::from(COLLECTION_MODS)));
+        if let Err(e) = self.settings.save() {
+            self.fail(e);
+        }
+        self.refresh_mods();
+        let n = self
+            .mods()
+            .and_then(|m| m.as_ref().ok())
+            .map_or(0, |m| m.len());
+        self.status = Some(format!(
+            "Mods from the collection: {n} mod{}",
+            if n == 1 { "" } else { "s" }
+        ));
+    }
+
+    /// Draws the download dialog while a collection file downloads (the name, a bar, Cancel)
+    /// or after it failed (the error, Close). Esc cancels or closes.
+    pub fn web_download_ui(&mut self, ctx: &egui::Context) {
+        use crate::palette::{INK, INK_DIM, SLATE_DARK, SLATE_LINE};
+        let Some(d) = DOWNLOAD.with_borrow(|d| d.clone()) else {
+            return;
+        };
+        let esc = ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                || (d.error.is_some() && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+        });
+        let frame = egui::Frame::new()
+            .fill(SLATE_DARK)
+            .stroke(egui::Stroke::new(1.0, SLATE_LINE))
+            .inner_margin(egui::Margin::same(12))
+            .corner_radius(3.0);
+        let mut close = esc;
+        egui::Modal::new(egui::Id::unique("orb_download"))
+            .frame(frame)
+            .backdrop_color(egui::Color32::from_black_alpha(120))
+            .show(ctx, |ui| {
+                ui.set_width(360.0);
+                ui.visuals_mut().override_text_color = Some(INK);
+                let title = if d.error.is_some() {
+                    "Download failed"
+                } else {
+                    "Downloading"
+                };
+                ui.label(egui::RichText::new(title).strong().size(15.0));
+                ui.add_space(4.0);
+                ui.label(&d.name);
+                ui.add_space(4.0);
+                match &d.error {
+                    Some(e) => {
+                        ui.colored_label(egui::Color32::from_rgb(0xe2, 0x41, 0x3b), e);
+                    }
+                    None => {
+                        let f = if d.total > 0 {
+                            (d.done as f32 / d.total as f32).min(1.0)
+                        } else {
+                            0.0
+                        };
+                        ui.add(egui::ProgressBar::new(f).desired_width(360.0));
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} of {}",
+                                crate::browser::human_size(d.done),
+                                crate::browser::human_size(d.total)
+                            ))
+                            .color(INK_DIM),
+                        );
+                    }
+                }
+                ui.add_space(6.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let text = if d.error.is_some() { "Close" } else { "Cancel" };
+                    if ui.button(text).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if close {
+            cancel_download(true);
         }
     }
 }

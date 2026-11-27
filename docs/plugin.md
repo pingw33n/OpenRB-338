@@ -1460,7 +1460,7 @@ are pixel-identical):
   standalone's settings file (`OpenRB-338/OpenRB-338.toml`, or the portable one next to the plugin file or bundle on Windows while `OpenRB-338.portable` is there, docs/building.md), shared; a save merges only its own
   change into the file as it is then, so open instances do not overwrite each other
   (task-229).
-- Mods: a mod chosen (the Mods menu, a song's mod, Choose file) is read and given to the plugin
+- Mods: a mod chosen (the Mods menu, a song's mod, Choose File) is read and given to the plugin
   (`OrbParams::set_mod`, embedded in the state). An editor that opens on a state's mod names a
   copy of its bytes in the temporary folder (`OpenRB-338/mods/<sha256>.rbm`), or the file an
   editor of the process chose, for the 808's mod window and Mods > Info. The editor has no

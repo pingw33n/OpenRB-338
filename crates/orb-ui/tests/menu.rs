@@ -1652,17 +1652,17 @@ fn refresh_list_reads_the_mods_folder_again() {
         }
     }
     let mods_at = mods_at.expect("the Mods menu did not open");
-    // task-118: Choose file..., Refresh List, a separator, then Demo Song and Info...
+    // task-118: Choose File..., Refresh List, a separator, then Demo Song and Info...
     let drawn = h.frame_shapes(vec![]);
     let at = |t: &str| drawn.find(t).unwrap_or_else(|| panic!("{t} is not drawn"));
-    assert!(at("Choose file...") < at("Refresh List"));
+    assert!(at("Choose File...") < at("Refresh List"));
     assert!(at("Refresh List") < at("Demo Song"));
     assert!(at("Demo Song") < at("Info..."));
     // a separator is a line segment: one between Refresh List and Demo Song, none between
-    // Choose file... and Refresh List (so the two form one group)
+    // Choose File... and Refresh List (so the two form one group)
     let lines = |a: &str, b: &str| drawn[at(a)..at(b)].matches("LineSegment").count();
     assert_eq!(lines("Refresh List", "Demo Song"), 1, "{drawn}");
-    assert_eq!(lines("Choose file...", "Refresh List"), 0);
+    assert_eq!(lines("Choose File...", "Refresh List"), 0);
     // the menu is open and drawn over a folder that changed: the list stays
     h.frame(vec![]);
     assert!(h.frame_shapes(vec![]).contains("Refresh List"));

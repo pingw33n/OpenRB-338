@@ -290,15 +290,7 @@ pub fn groups(is_mac: bool) -> Vec<Group> {
             note: "",
             rows: vec![
                 menu_row(is_mac, &shortcuts::NEW, "File > New"),
-                menu_row(
-                    is_mac,
-                    &shortcuts::OPEN,
-                    if cfg!(target_arch = "wasm32") {
-                        "File > Open Local..."
-                    } else {
-                        "File > Open..."
-                    },
-                ),
+                menu_row(is_mac, &shortcuts::OPEN, "File > Open..."),
                 menu_row(is_mac, &shortcuts::SAVE, "File > Save"),
                 menu_row(is_mac, &shortcuts::INFO, "File > Info..."),
                 menu_row(is_mac, &shortcuts::UNDO, "Edit > Undo"),

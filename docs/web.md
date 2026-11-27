@@ -204,15 +204,15 @@ from the desktop app is in `docs/ui_spec.md` section 26.
   willReadFrequently attribute set to true"). The page removes it
   (`egui::Context::set_glyph_rasterizers(Vec::new())`): the text uses the app's fonts only, as
   natively, and nothing on the page reads pixels back.
-- **Open** (the user's decision of 2026-11-27, task-172's review). File > **Open Local...**
+- **Open** (the user's decision of 2026-11-27, task-172's review). File > **Open...**
   and Ctrl/Cmd+O open the browser's file picker directly (`web::pick`, no in-app browser on the
-  web for local files), as do Mods > Choose file... and Mods > Choose Mods Folder... (the folder
+  web for local files), as do Mods > Choose File... and Mods > Choose Mods Folder... (the folder
   picker). Ctrl/Cmd+N, O and S run their menu items' commands (`Cmd::New`, `Cmd::Open`,
   `Cmd::Save`), so a shortcut does what its item does; before the review Ctrl/Cmd+O opened the
   in-app browser while the menu item opened the picker. Chromium and Firefox count the keydown
   as the user activation a picker needs; the picker opens in the frame after it, within the
   activation's time (checked: `navigator.userActivation.isActive` was true at the input's
-  click). Opening songs from the rb-songs and rb-mods collections is task-174's.
+  click). The collections are File > Open Collection... and Mods > Use Collection (section 9).
 - **The mods folder is read lazily.** A picked mods folder can be large (the user's is 326 mods,
   1 GB). For each `.rbm` at its top the page runs `rbm::Walk`, the walk `Rbm::parse` itself
   runs, over `File.slice`s of the file: the CAT header, every chunk header (an overrun fails),
@@ -263,7 +263,7 @@ inputs:
   gap 6 ms, `playbackStats` 0 underruns, also with the main thread busy 40 ms of every 50 ms.
 - **Loading**: the loading screen and the sliced rasterizing of section 7 (before, `index.html`
   removed its text when `start` returned, and the half-drawn panel and the menu showed).
-- **Open**: File > Open Local... and Ctrl/Cmd+O both open the browser's picker (Ctrl/Cmd+O
+- **Open**: File > Open... and Ctrl/Cmd+O both open the browser's picker (Ctrl/Cmd+O
   opened the in-app browser before).
 - **A 1 GB mods folder** (326 mods, `~/rb-mods/mods`, given to the folder picker's input): the
   INFOs were read in 214 ms, the wasm memory stayed at 27 MB; the Mods menu listed them; a song
@@ -408,3 +408,104 @@ does not list are gone (the page gets them from the song it opens), and the hash
 text saves 2 % over the compact JSON and needs its own escaping and a hand parser (a title may
 hold tabs or newlines, a list of mods has no cell), so the index stays JSON, which the page
 already parses with serde.
+
+## 9. The collections on the page (task-174)
+
+The page offers the songs of rb-songs and the mods of rb-mods (the user's design of
+2026-11-27: two entry points, File > Open... for the computer's files and File > Open
+Collection... for the song collection; the mod collection is the Mods folder of a page load,
+and Mods > Use Collection tells and switches it).
+What the user sees is in `docs/ui_spec.md` section 26. Code: `crates/orb-ui/src/collection.rs`
+(the index, the checks and the cache record; it builds on every target and its tests run
+natively) and the section "the collections" of `crates/orb-ui/src/web.rs`.
+
+- **The index.** At the start the page fetches `index.json` next to it (a relative URL, with the
+  request's cache mode `no-cache`, so a deploy's new index is seen; `scripts/build-web.sh --index
+  FILE` puts it there) and reads it with `collection::Index::parse` (format 1, the columns looked
+  up by name). Every song and mod with a hash becomes a **lazy file** of the memory file system
+  (`orb_cli::fs::insert_lazy`, section 7, "The mods folder is read lazily"): `/rb-songs/<path>`
+  and `/rb-mods/<path>`, with the size, and for a mod an INFO holding its index name. So the
+  in-app browser lists the folders of `/rb-songs/songs`, and `orb_cli::mods::scan` (the Mods
+  menu, `find_preferring`, the remembered variant preference of task-151) works on
+  `/rb-mods/mods` as on any mods folder, without a byte of a mod. The page does not read the
+  index's `mod_variants`: the lookup is orb's own over the same names, which `mod_variants`
+  equal (section 8.2, task-173's test). A failed index (none deployed, offline) is logged to the
+  console; File > Open Collection... then shows the error and asks for the index again.
+- **The mods source.** At the start `settings.mods_dir` is `/rb-mods/mods` for the session,
+  whatever `localStorage` holds; Mods > Choose Mods Folder... replaces it with a picked folder
+  (section 7) for the session. Mods > Use Collection is checked while `mods_dir` is
+  `/rb-mods/mods` (`collection::is_mods_folder`, `App::uses_collection`); `Cmd::UseCollection`
+  then opens the folder picker (`web::pick(Pick::ModsFolder)`, so a cancel changes nothing),
+  and when unchecked it sets `mods_dir` back (`App::web_use_collection`) and reads the Mods
+  menu again. The picked folder's files stay in memory (the song may play one of them).
+- **The in-app browser on the web** is reached only by File > Open Collection...; its sidebar
+  has the one place "Song collection" (`Browser::sidebar_body` on wasm32), no other places, no
+  recent folders and no "Use as ... folder" buttons (the user's review of 2026-11-27).
+- **Opening a song** (`App::web_open_song`: a song of the song collection, picked or dropped)
+  asks about unsaved changes first, as natively, so a cancel downloads nothing; after Save or
+  Don't Save, `App::web_fetch_and_open` downloads the song and its mod, then opens the song
+  without asking again (`Picked::OpenNow`; the prompt's `Then::Open` goes there on the web).
+- **A lazy file's source** is a picked `File` (a mods folder) or a collection file. When a song
+  or the Mods menu needs a collection file (`App::web_load_then`: a song opened from the
+  browser, its mod, a Mods menu choice), it is fetched (`fetch_into`), written
+  into the memory file system, and then the waiting action runs (a song: download the song,
+  then its mod, then open it).
+- **The download.** `fetch_file` takes the file from the page's cache when it holds it and the
+  bytes pass the check, else fetches its raw URL (`raw_base` + the path percent-encoded except
+  the unreserved characters and `/`) with an `AbortController` (Cancel), reads the body as a
+  stream for the dialog's progress, and checks the HTTP status (404: the collection changed since
+  the index), a network failure (`navigator.onLine` tells "offline"), then the size and the
+  SHA-256 against the index (`collection::File::check`). A file that fails is not used: the
+  error stays in the download dialog, and nothing else changes (the song that plays plays on).
+  A cancelled download or one replaced by the next is dropped when it ends.
+- **The cache** (the Cache API, cache `orb-collection`; secure contexts only, so `localhost`, a
+  `127.0.0.1` server or GitHub Pages; without it every use downloads). The key is a page-relative
+  URL `orb-cache/sha256/<the index's base64url hash>`, so a file is found by its content whatever
+  its path. **The cap** (the user's addition of 2026-11-27): `collection::CACHE_CAP`, 256 MB
+  (256 x 2^20 bytes). The Cache API keeps no sizes or use times, so the page keeps a record in
+  `localStorage` (`/OpenRB-338/cache-lru.json`: per key the size and the tick of the last use;
+  `collection::CacheLru`). A hit and a store are uses (`CacheLru::admit`): before a store the least
+  recently used files are deleted until the new file fits under the cap, and a file larger than
+  the cap is not stored. A failed store (the browser's quota) is like any cache failure: the key
+  leaves the record, the file opens from memory, no error is shown. The page requests no
+  persistent storage (the user's choice), so the browser may evict the whole cache; the record
+  then names files that are gone, which cost only their share of the cap until they are evicted
+  from the record.
+- **For checks.** `orbState()` adds `collection` (`"loading"`, `{songs, mods}` or `{error}`),
+  `download` (name, done, total, error, or null), `cacheHits`, `downloaded` and `cancelled`.
+
+### 9.1 Checked (Chrome, macOS, 2026-11-27)
+
+Built with `scripts/build-web.sh --index` (rb-songs `6e0b92e`, rb-mods `bfbd8c9`, 910,189
+bytes), served under `/OpenRB-338/web/` on a local port, the cache and its record cleared
+first:
+
+- The index: 5685 songs, 326 mods. Open Collection... lists `/rb-songs/songs`; typing "orion"
+  selects `orion.rbs`; Enter shows "Downloading orion.rbs", then the mod; the kit is
+  `/rb-mods/mods/Orbit2.rbm` (5,064,616 bytes) and Play plays (0 underruns). The record:
+  `orion.rbs` 28,092 bytes at tick 1, `Orbit2.rbm` at tick 2.
+- After a reload, the same song: 2 cache hits, 0 downloads, and no request to
+  raw.githubusercontent.com in the network panel.
+- A mod chosen from the collection (then by Mods > Mod Collection..., replaced in the review
+  below; the Mods menu downloads the same way): AXIOM.rbm, one request,
+  `https://raw.githubusercontent.com/pingw33n/rb-mods/bfbd8c9.../mods/AXIOM.rbm`, 200.
+- With the raw URLs answered by a stub while `orion.rbs` played: a 404, a rejected fetch with
+  the browser offline, a short file, a file of the right size with another hash, and a slow
+  stream cancelled each left the song playing; the first four showed their message in the
+  dialog, the cancel "The download of orbitlife.rbs was cancelled" in the status line.
+- A mods folder picked after the start (one `Orbit2.rbm`) takes precedence: `orion.rbs` then
+  plays `/Mods/Picked/Orbit2.rbm`.
+
+### 9.2 The user's review of dbf6037 (2026-11-27), checked in Chrome
+
+- Mods > Mod Collection... is gone; **Use Collection** is a check item before Choose Mods
+  Folder... Checked on a page load. Clicked checked: the folder picker's input was clicked (the
+  check recorded it) and, with no choice, the item stayed checked. A folder given to the input
+  (`CaveyRageRemix.rbm`): unchecked, the Mods menu lists that one mod. Clicked again: checked,
+  "Mods from the collection: 317 mods" (326 files, 317 INFO names) and the collection's list.
+- File > **Open...**; Ctrl/Cmd+O clicks the song picker's input.
+- File > Open Collection...: the sidebar shows "Song collection" only.
+- The user's last changes (2026-11-27, not reviewed in a browser by the user, who approved the
+  round-1 build): Use Collection moved before Choose File..., so the web's order is Use
+  Collection, Choose File..., Choose Mods Folder...; "Choose file..." is "Choose File..." (Title
+  Case) natively too.

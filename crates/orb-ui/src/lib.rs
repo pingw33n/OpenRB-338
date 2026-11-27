@@ -17,6 +17,7 @@ pub mod backdrop;
 pub mod behavior;
 pub mod browser;
 pub mod clipboard;
+pub mod collection;
 pub mod controller;
 pub mod crash;
 pub mod document;

@@ -392,7 +392,7 @@ fn the_plugin_has_no_themes() {
     let bar = h.texts.join("|");
     assert!(bar.contains("Mods") && !bar.contains("View"), "{bar}");
     // the Mods menu (File, Edit, Mods, Options, Help)
-    h.open_menu_with("Choose file...");
+    h.open_menu_with("Choose File...");
     let texts = h.texts.join("|");
     assert!(texts.contains("Refresh List"), "the Mods menu: {texts}");
     assert!(!texts.contains("Theme Viewer"), "{texts}");

@@ -56,13 +56,9 @@ use crate::session;
 use crate::settings::Theme;
 use crate::shortcuts;
 
-/// File > Open...: on the web "Open Local...", the browser's file picker (the user's decision of
-/// 2026-11-27; a later "Open Collection" is task-174's).
-pub const OPEN_ITEM: &str = if cfg!(target_arch = "wasm32") {
-    "Open Local..."
-} else {
-    "Open..."
-};
+/// File > Open...: on the web the browser's file picker (the user's decision of 2026-11-27); the
+/// collection is File > Open Collection... (task-174).
+pub const OPEN_ITEM: &str = "Open...";
 
 /// The height of the menu bar in points.
 pub const MENU_H: f32 = 22.0;
@@ -108,11 +104,19 @@ pub enum Cmd {
     OutputRouting,
     /// Help > About.
     About,
-    /// "Choose file..." of the Mods menu: the browser for a mod.
+    /// "Choose File..." of the Mods menu: the browser for a mod.
     ChooseModFile,
     /// "Choose Mods Folder..." of the web's Mods menu (task-172): the browser's folder picker;
     /// its mods are the Mods folder for the session ([`crate::web`]).
     ChooseModsFolder,
+    /// File > Open Collection... of the web (task-174): the in-app browser on the rb-songs
+    /// collection. Nothing natively.
+    OpenCollection,
+    /// Mods > Use Collection of the web (task-174, the user's review of 2026-11-27), a check item
+    /// checked while the Mods folder is the rb-mods collection: unchecked, it goes back to the
+    /// collection (the picked folder is no longer used); checked, it does what Choose Mods
+    /// Folder... does (a cancelled picker leaves it checked). Nothing natively.
+    UseCollection,
     /// A kit from the Mods menu (or a mod file the browser chose).
     UseKit(Kit),
     /// A variant in the submenu of mods that share an INFO name (task-151): plays it, or when
@@ -586,7 +590,7 @@ impl App {
     /// Whether replacing the song asks first: unsaved changes, with a player. Never in a
     /// plugin's editor, whose song is kept in the host's project and which has no Save
     /// (task-201).
-    fn asks_to_save(&self) -> bool {
+    pub(crate) fn asks_to_save(&self) -> bool {
         self.doc.modified && self.link.is_some() && !self.is_plugin()
     }
 
@@ -1312,7 +1316,7 @@ impl App {
             Cmd::New => self.new_song(),
             #[cfg(not(target_arch = "wasm32"))]
             Cmd::Open => self.open_browser(Mode::OpenSong),
-            // the page cannot list the computer's folders: File > Open Local... is the browser's
+            // the page cannot list the computer's folders: File > Open... is the browser's
             // own file picker (`App::web_picked` opens what it gives; the user's decision of
             // 2026-11-27)
             #[cfg(target_arch = "wasm32")]
@@ -1357,7 +1361,17 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             Cmd::ChooseModsFolder => crate::web::pick(crate::web::Pick::ModsFolder),
             #[cfg(not(target_arch = "wasm32"))]
-            Cmd::ChooseModsFolder => {}
+            Cmd::ChooseModsFolder | Cmd::OpenCollection | Cmd::UseCollection => {}
+            #[cfg(target_arch = "wasm32")]
+            Cmd::OpenCollection => self.web_open_collection(),
+            #[cfg(target_arch = "wasm32")]
+            Cmd::UseCollection => {
+                if self.uses_collection() {
+                    crate::web::pick(crate::web::Pick::ModsFolder);
+                } else {
+                    self.web_use_collection();
+                }
+            }
             Cmd::UseKit(kit) => self.use_kit(kit),
             Cmd::ChooseVariant(p) => self.choose_variant(p),
             Cmd::DemoSong => self.demo_song(),
@@ -1780,6 +1794,12 @@ impl App {
         self.panel.press(&button, 0.0);
     }
 
+    /// Whether the Mods folder is the web page's mod collection (Mods > Use Collection is
+    /// checked; task-174). Never natively.
+    pub fn uses_collection(&self) -> bool {
+        crate::collection::is_mods_folder(self.settings.mods_dir.as_deref())
+    }
+
     /// Makes `dir` the Mods folder (the browser's mode "Choose mods folder", the web's Mods >
     /// Choose Mods Folder...): saved in the settings, and the Mods menu reads it again.
     pub fn use_mods_folder(&mut self, dir: &Path) {
@@ -1805,10 +1825,18 @@ impl App {
     /// What a browser chose, by its mode (not an open: `open_song`).
     pub fn chosen(&mut self, mode: Mode, path: PathBuf) {
         match mode {
+            #[cfg(not(target_arch = "wasm32"))]
             Mode::OpenSong => self.open_song(&path),
+            // the web's in-app browser lists the collections: a file is downloaded first
+            // (task-174)
+            #[cfg(target_arch = "wasm32")]
+            Mode::OpenSong => self.web_open_song(&path),
             Mode::SaveSong => self.save_to(&path),
             Mode::Export => self.export_to(&path),
+            #[cfg(not(target_arch = "wasm32"))]
             Mode::ChooseMod => self.use_kit(Kit::Mod(path)),
+            #[cfg(target_arch = "wasm32")]
+            Mode::ChooseMod => self.command(Cmd::UseKit(Kit::Mod(path))),
         }
     }
 
@@ -1864,7 +1892,11 @@ impl App {
     /// Does what the prompt guarded.
     fn proceed(&mut self, then: Then) {
         match then {
+            #[cfg(not(target_arch = "wasm32"))]
             Then::Open(p) => self.open_now(&p),
+            // the web downloads a song of the collection and its mod after the answer (task-174)
+            #[cfg(target_arch = "wasm32")]
+            Then::Open(p) => self.web_fetch_and_open(&p),
             Then::Demo(p) => self.open_demo_now(&p),
             Then::New => self.new_now(),
             Then::Quit => self.allow_close = true,
@@ -1892,9 +1924,14 @@ impl App {
         self.prompt.is_some()
     }
 
-    /// Whether a question is open (the unsaved-changes prompt or Initialize Song's): the panel
-    /// then takes no keys and no clicks of its own.
+    /// Whether a question is open (the unsaved-changes prompt or Initialize Song's; on the web
+    /// also the download dialog, task-174): the panel then takes no keys and no clicks of its
+    /// own.
     pub(crate) fn asking(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        if crate::web::download_shown() {
+            return true;
+        }
         self.prompt.is_some() || self.confirm_init
     }
 
@@ -2062,6 +2099,10 @@ impl App {
             if item(ui, OPEN_ITEM, key(&shortcuts::OPEN)) {
                 *cmd = Some(Cmd::Open);
             }
+            // the rb-songs collection (task-174)
+            if cfg!(target_arch = "wasm32") && item(ui, "Open Collection...", None) {
+                *cmd = Some(Cmd::OpenCollection);
+            }
             if !plugin && item(ui, "Save", key(&shortcuts::SAVE)) {
                 *cmd = Some(Cmd::Save);
             }
@@ -2222,7 +2263,16 @@ impl App {
                 }
             }
             ui.separator();
-            if item(ui, "Choose file...", None) {
+            // the rb-mods collection, or a folder of the computer for the session (task-174):
+            // on the web Use Collection, Choose File..., Choose Mods Folder...
+            if cfg!(target_arch = "wasm32") {
+                let mut on = self.uses_collection();
+                if ui.checkbox(&mut on, "Use Collection").clicked() {
+                    *cmd = Some(Cmd::UseCollection);
+                    ui.close();
+                }
+            }
+            if item(ui, "Choose File...", None) {
                 *cmd = Some(Cmd::ChooseModFile);
             }
             if cfg!(target_arch = "wasm32") && item(ui, "Choose Mods Folder...", None) {

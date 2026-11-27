@@ -11,7 +11,12 @@
 # http://localhost:PORT/OpenRB-338/web/ (default port 8338) until interrupted, through a folder
 # of links that puts the site under that sub-path.
 #
-#   scripts/build-web.sh [--serve [PORT]]
+#   scripts/build-web.sh [--index FILE] [--serve [PORT]]
+#
+# --index FILE copies FILE (the collection index `orb web-index` writes, docs/web.md section 8)
+# into the site as index.json, which the page fetches for File > Open Collection... and the mod
+# collection (task-174, docs/web.md section 9). Without it the site has no index and the page
+# has no collections.
 #
 # Needs the pinned toolchain's wasm32-unknown-unknown target (rust-toolchain.toml) and
 # wasm-bindgen-cli of the lockfile's wasm-bindgen version (0.2.129):
@@ -24,6 +29,24 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 target="${CARGO_TARGET_DIR:-$root/target}"
 out="$root/dist/web"
 want=0.2.129
+index=""
+serve=""
+port=8338
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --index) index="${2:?--index needs a file}"; shift 2 ;;
+        --serve)
+            serve=1
+            shift
+            if [[ $# -gt 0 && "$1" != --* ]]; then port="$1"; shift; fi
+            ;;
+        *) echo "usage: scripts/build-web.sh [--index FILE] [--serve [PORT]]" >&2; exit 2 ;;
+    esac
+done
+if [[ -n "$index" ]]; then
+    index="$(cd "$(dirname "$index")" && pwd)/$(basename "$index")"
+    [[ -f "$index" ]] || { echo "--index $index: no such file" >&2; exit 1; }
+fi
 
 if ! have="$(wasm-bindgen --version 2>/dev/null)"; then
     echo "wasm-bindgen not found: cargo install wasm-bindgen-cli --version $want --locked" >&2
@@ -47,13 +70,15 @@ cp "$wasm/orb_worklet.wasm" "$out/"
 wasm-bindgen --target web --no-typescript --out-dir "$out/pkg" "$wasm/orb_web.wasm"
 cp crates/orb-web/index.html "$out/"
 cp assets/app_icon.ico "$out/favicon.ico"
+if [[ -n "$index" ]]; then
+    cp "$index" "$out/index.json"
+fi
 echo "built $out:"
 (cd "$out" && find . -type f | sort | while read -r f; do
     printf '  %-24s %8d bytes\n' "${f#./}" "$(wc -c < "$f")"
 done)
 
-if [[ "${1:-}" == "--serve" ]]; then
-    port="${2:-8338}"
+if [[ -n "$serve" ]]; then
     serve="$target/web-serve"
     rm -rf "$serve"
     mkdir -p "$serve/OpenRB-338"

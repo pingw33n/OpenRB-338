@@ -156,7 +156,7 @@ The Windows build of OpenRB-338 is a GUI-subsystem exe (task-111), see "The Wind
 | `scripts/validate-plugin.sh [DIR]` | downloads the pinned pluginval and runs it on `OpenRB-338.vst3` in `DIR` (default `target/bundled`); exit 1 on a failure (below, "The plugin") |
 | `scripts/wasm-check.sh` | renders the corpus natively and on wasm32-wasip1 under the pinned wasmtime and requires equal SHA-256s; exit 1 on a difference (below, "The wasm build") |
 | `scripts/web-demo.sh [--serve [PORT]]` | builds the web player's worklet module and test page into `target/web-demo/` and serves it at `http://localhost:PORT/` (below, "The web player") |
-| `scripts/build-web.sh [--serve [PORT]]` | builds OpenRB-338 as a web page into `dist/web/` and serves it at `http://localhost:PORT/OpenRB-338/web/` (below, "The web page") |
+| `scripts/build-web.sh [--index FILE] [--serve [PORT]]` | builds OpenRB-338 as a web page into `dist/web/` (with the collection index FILE) and serves it at `http://localhost:PORT/OpenRB-338/web/` (below, "The web page") |
 | `scripts/build-all.sh [TARGET...]` | packages every target practical from this machine, and lists the skipped and failed ones |
 | `scripts/package-dmg.sh` | `scripts/package-dmg.sh TARGET` (a macOS target) builds it, then `dist/<target>/OpenRB-338-<YYYY.MMDD.HHMM>-<target>.dmg` (`SKIP_BUILD=1` uses the existing `bin/` folder) |
 | `scripts/package-installer.sh TARGET` | `build.sh` for a Windows target, then `dist/<target>/OpenRB-338-<YYYY.MMDD.HHMM>-<x64\|arm64>-setup.exe` with NSIS (`SKIP_BUILD=1` uses the existing `bin/`; `MAKENSIS` names makensis) |
@@ -538,6 +538,7 @@ app is in `docs/ui_spec.md` section 26, how it is put together in `docs/web.md` 
 
     scripts/build-web.sh             # writes dist/web/
     scripts/build-web.sh --serve     # then serves it at http://localhost:8338/OpenRB-338/web/
+    scripts/build-web.sh --index index.json --serve   # with the collections (task-174)
 
 - **Tools.** The pinned toolchain with its `wasm32-unknown-unknown` target
   (`rust-toolchain.toml`) and **wasm-bindgen-cli 0.2.129**, the one of "The web player" (`cargo
@@ -550,6 +551,12 @@ app is in `docs/ui_spec.md` section 26, how it is put together in `docs/web.md` 
   path: GitHub Pages serves the project site under `/OpenRB-338/`, and the deploy (task-175) puts
   the page under `/OpenRB-338/web/`. `--serve [PORT]` serves it under that same sub-path (a
   folder of links in `target/web-serve/`, `python3 -m http.server`, default port 8338).
+- **The collections** (task-174). `--index FILE` copies the collection index into the site as
+  `index.json`, which the page fetches for File > Open Collection... and the mod collection
+  (`docs/web.md` sections 8 and 9). Make it with `orb web-index --songs RB-SONGS/songs --mods
+  RB-MODS/mods --songs-commit SHA --mods-commit SHA -o index.json` (both commits pushed: the page
+  downloads the files from them). Without `--index` the page has no collections (the Mods menu
+  is empty until a folder is picked, and Open Collection... says the index is not available).
 - **The crates.** `crates/orb-web` is the page's module (a cdylib, empty off wasm32): it calls
   `orb_ui::web::start`. orb-ui builds for wasm32 with its feature `app` (eframe with its default
   features: wgpu with WebGPU, falling back to WebGL2); on wasm32 it takes orb-player with the

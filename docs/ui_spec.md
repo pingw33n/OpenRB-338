@@ -1386,8 +1386,8 @@ the window, `App::menu`; the headless panel tests run without it) and the comman
 | Edit | 808 Pattern Editor... (Ctrl+E, Cmd+E) | under the 303s': opens the floating 808 pattern editor on the TR-808's active pattern, or brings it to the front and switches it to that pattern (section 24, task-280); disabled without a song. Ctrl/Cmd+E opens the focused row's editor, so the menu writes its text on the item the key opens now: the 303-1's or the 303-2's with that 303 focused, the 808's with the 808 focused, the 909's with the 909 focused (tasks 280, 281 and 290) |
 | Edit | 909 Pattern Editor... (Ctrl+E, Cmd+E) | under the 808's: opens the floating 909 pattern editor on the TR-909's active pattern, or brings it to the front and switches it to that pattern (section 25, task-281); disabled without a song; the shortcut text is on it with the TR-909 focused |
 | View | Classic, Modern | two radio items directly in View, no submenu (the user's review of task-267, 2026-11-21): a radio choice of the main window's skin: Modern (the SVG panel, the default) or Classic (the original's panel from the kit's bitmaps, section 21); saved in the settings file at once (`theme`, section 17) and taken by the next run; the standalone app's only, a plugin's editor has no View menu (task-267) |
-| Mods | Standard ReBirth, a mod per file, Choose file... | the song's kit, checked (below) |
-| Mods | Refresh List | reads the Mods folder again (the list cache, below; task-101); directly after "Choose file..." with a separator after it, so the two form one group (task-118); the status line then says "Mod list refreshed: N mods in <folder> (+a, -b)" (what changed against the previous list, by file), a read error of the folder goes to the error message box (section 18.0) |
+| Mods | Standard ReBirth, a mod per file, Choose File... | the song's kit, checked (below) |
+| Mods | Refresh List | reads the Mods folder again (the list cache, below; task-101); directly after "Choose File..." with a separator after it, so the two form one group (task-118); the status line then says "Mod list refreshed: N mods in <folder> (+a, -b)" (what changed against the previous list, by file), a read error of the folder goes to the error message box (section 18.0) |
 | Mods | Demo Song | opens the `Demo.rbs` of the current song's mod (below); enabled only when that mod file has one, so never for "Standard ReBirth" (task-094) |
 | Mods | Info... | a centered, closable window (Escape closes it) with the splash of the kit that plays at its 2000-era physical size, the mod's INFO facts and the file's (task-106; below) |
 | Options | Vintage ReBirth Synth Sound | the song's sound model (the original has it in the Edit menu) |
@@ -1812,7 +1812,7 @@ OpenRB-338-specific (a UI decision of the user, not a fact about the original).
     it as one box (`App::fail_many`), so an Open with a missing mod and a refused load is one
     box with two lines, not two boxes.
 - **The rule: the box is for the error of a one-time action the user expects to happen.**
-  That is Open, Save, Save As, New, Demo Song, a mod choice, Choose file, Refresh List, the
+  That is Open, Save, Save As, New, Demo Song, a mod choice, Choose File, Refresh List, the
   settings write after an Options change, and the start-up song or mod of the command line.
   An error that can repeat or come in the background (a failing audio output, a device that
   disappears, a stream error raised again, a periodic retry) never opens a box: it is a
@@ -2761,7 +2761,7 @@ Linux).
 **Keyboard Shortcuts** (section 18, Help): no group for this editor (the user's cut of
 task-284), as for the 808's.
 
-## 26. The web version (task-172)
+## 26. The web version (task-172, task-174)
 
 The same window runs in a browser page (`scripts/build-web.sh`, `docs/building.md` "The web
 page"; how it works: `docs/web.md` section 7). The panel, the skins, the menu, the windows and
@@ -2774,8 +2774,8 @@ the keyboard are the standalone app's. What differs:
   after a start in Classic, or after its parts were dropped), until it is whole; a resize draws
   the parts from their last size until the new one is ready. The page never shows a half-drawn
   panel.
-- **Files.** A page sees no folders of the computer. File > **Open Local...** (and Ctrl/Cmd+O)
-  and Mods > Choose file... open the browser's own file picker (no in-app browser for local
+- **Files.** A page sees no folders of the computer. File > **Open...** (and Ctrl/Cmd+O)
+  and Mods > Choose File... open the browser's own file picker (no in-app browser for local
   files on the web). The Mods menu has **Choose Mods Folder...** (the browser's folder picker):
   the folder's `.rbm` files are the Mods folder for the session, found by their INFO names with
   the native rules (`orb_cli::mods::scan`). When the folder is picked, each mod is checked as
@@ -2784,8 +2784,44 @@ the keyboard are the standalone app's. What differs:
   memory stays at about 30 MB). A mod is read whole when a song or the Mods menu uses it
   ("Reading NAME ..." in the status line). A song (`.rbs`) dropped onto the page opens; mods
   (`.rbm`) dropped onto it join the Mods folder. The files are kept in memory
-  until the page is closed or reloaded; the settings remember the Mods folder's name, but it is
-  empty after a reload until it is picked again.
+  until the page is closed or reloaded; a picked Mods folder is for its session only: after a
+  reload the Mods folder is the mod collection again (below).
+- **The collections** (task-174; the user's design of 2026-11-27; how: `docs/web.md` section 9).
+  The page lists the songs of github.com/pingw33n/rb-songs and the mods of
+  github.com/pingw33n/rb-mods from an index deployed next to it, and downloads a file only when
+  it is used, from the collections' commit the index names.
+  - **File > Open Collection...** opens the in-app browser (section 17) on the song
+    collection: the "Song collection" place, the collection's folders and songs with their
+    sizes, the keyboard navigation and type-to-jump as natively, starting in the folder of the
+    last song opened there. Its one place is "Song collection" (sentence case, as "Recent
+    folders"): the web has no Songs, Mods or Home place, no recent folders and no "Use as ...
+    folder" buttons (the user's review of 2026-11-27; this is the only way to the in-app
+    browser on the web). Opening a song downloads it, then its mod, then opens it (the
+    unsaved-changes prompt first, as natively).
+  - **The Mods folder of a page load is the mod collection**: the Mods menu lists its mods by
+    INFO name, sorted and grouped into variants as natively, and a song's mod is found there by
+    the native rules, the remembered variant preference included; a mod the collection has not
+    got shows the native message. **Mods > Choose Mods Folder...** replaces it with a folder of
+    the computer for the session, which then decides as a Mods folder does natively.
+  - **Mods > Use Collection**, a check item, the first of Use Collection, Choose File... and
+    Choose Mods Folder... (the user's reviews of 2026-11-27), is checked while the mods come from the collection (the default of a page
+    load) and unchecked once a mods folder is picked. Clicking it unchecked goes back to the
+    collection (the picked folder is no longer used; "Mods from the collection: N mods" in the
+    status line). Clicking it checked does what Choose Mods Folder... does: the folder picker
+    opens, and if it is cancelled the item stays checked.
+  - **The download dialog** shows the file's name, a progress bar and "N of M", with Cancel
+    (and Esc). A failure stays in the dialog until Close (or Esc or Enter): no connection ("the
+    download failed (the browser is offline)"), a file the server has not got ("HTTP 404 ...
+    reload the page"), or a file that is not the index's (its size or SHA-256 differs; it is not
+    used). A cancel closes the dialog and says so in the status line. In every case nothing
+    changes: the song that plays plays on.
+  - **The cache.** A downloaded file is kept in the browser's cache, keyed by its SHA-256, and
+    taken from there the next time (also after a reload), so a mod is downloaded once. The cache
+    holds at most **256 MB** (256 x 2^20 bytes): past it the least recently used files are
+    removed first (opening a file from the cache counts as a use) until the new one fits; a
+    larger file is not kept. When the browser refuses to store a file (its quota), the file
+    still opens, with no message. The page asks for no persistent storage, so the browser may
+    clear the cache itself.
 - **Save and Export** have no in-app save dialog on the web (the user's decision of
   2026-11-27). Save As, and Save of a song that was not saved in this page yet, ask the
   browser: where it has its own save picker (`showSaveFilePicker`: Chrome, Edge, Opera, Brave

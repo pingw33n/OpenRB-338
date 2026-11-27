@@ -46,8 +46,10 @@ egui_extras = { version = "0.37.0", features = ["svg"] }
 resvg = { version = "0.45.1", default-features = false }
 # Saves the --screenshot PNG; decodes the mods' splash.jpg.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-# The pattern as JSON on the clipboard (task-287).
+# The pattern as JSON on the clipboard (task-287); the web's collection index (task-174).
 serde_json = "1"
+# The check of a collection file the web page downloads (task-174).
+sha2 = "0.10"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 orb-cli = { path = "../orb-cli", default-features = false, features = ["ogg"] }
@@ -70,6 +72,8 @@ wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "=0.4.79"
 js-sys = "=0.3.106"
 web-sys = { version = "=0.3.106", features = [
+  "AbortController",
+  "AbortSignal",
   "Blob",
   "BlobPropertyBag",
   "console",
@@ -86,7 +90,13 @@ web-sys = { version = "=0.3.106", features = [
   "HtmlElement",
   "HtmlInputElement",
   "Location",
+  "Navigator",
   "Node",
+  "ReadableStream",
+  "ReadableStreamDefaultReader",
+  "RequestCache",
+  "RequestInit",
+  "Response",
   "Storage",
   "Url",
   "Window",
@@ -98,7 +108,6 @@ orb-ui-art = { path = "../orb-ui-art" }
 # The gated tests' external inputs (task-121).
 orb-testkit = { path = "../orb-testkit" }
 tempfile = "3.27.0"
-sha2 = "0.10"
 
 [build-dependencies]
 embed-resource = "3"

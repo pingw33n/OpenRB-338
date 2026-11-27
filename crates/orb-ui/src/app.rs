@@ -474,6 +474,11 @@ impl App {
         self.browser = Some(Browser::new(mode, &self.settings));
     }
 
+    /// Opens the file browser for `mode` in the folder `dir` (the web's collections, task-174).
+    pub fn open_browser_in(&mut self, mode: Mode, dir: &std::path::Path) {
+        self.browser = Some(Browser::new(mode, &self.settings).with_dir(dir));
+    }
+
     /// Where the open browser drew its part `name` last (for tests; `Browser::hit`).
     pub fn browser_hit(&self, name: &str) -> Option<Rect> {
         self.browser.as_ref().and_then(|b| b.hit(name))
@@ -1374,6 +1379,8 @@ impl App {
         self.plugin_usage_ui(&ctx);
         self.routing_ui(&ctx);
         self.mod_info_ui(&ctx);
+        #[cfg(target_arch = "wasm32")]
+        self.web_download_ui(&ctx);
         self.raise_windows(&ctx);
         self.poll_export(&ctx);
         if let Some(text) = self.clip_text.take() {

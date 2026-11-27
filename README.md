@@ -123,7 +123,7 @@ in the plugin: Help > Plugin Usage), and docs/plugin.md describes how it works.
 5. **Point it at your songs and mods.**
    - **Songs:** File > Open... opens the file browser. Go to the folder of your songs and click
      "Use as songs folder", so the browser starts there next time. Then open a song (`.rbs`).
-   - **Mods:** Mods > Choose file... opens the browser on mods. Go to your mods folder and click
+   - **Mods:** Mods > Choose File... opens the browser on mods. Go to your mods folder and click
      "Use as mods folder". The Mods menu then lists every mod in it, and a song finds its mod
      there by name. Mods must be recrypted to load (see below); the mods of the mod collection
      already are.

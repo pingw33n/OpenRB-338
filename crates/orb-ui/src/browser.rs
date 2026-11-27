@@ -866,6 +866,25 @@ impl Browser {
     }
 
     fn sidebar_body(&mut self, ui: &mut Ui, settings: &mut Settings) {
+        // the web page (task-174, the user's review of 2026-11-27): the in-app browser is File >
+        // Open Collection...'s, so its one place is the song collection; the page has no songs
+        // or mods folder to use, no home and no recent folders of the computer
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = settings;
+            ui.label(RichText::new("Places").color(INK_DIM));
+            let p = PathBuf::from(crate::web::COLLECTION_SONGS);
+            if orb_cli::fs::is_dir(&p) {
+                let r = ui
+                    .selectable_label(self.dir.starts_with(&p), "Song collection")
+                    .on_hover_text(p.display().to_string());
+                self.hits.push(("place:Song collection".into(), r.rect));
+                if r.clicked() {
+                    self.go(p);
+                }
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         {
             let mut places: Vec<(String, PathBuf)> = Vec::new();
             let songs = settings
@@ -931,6 +950,8 @@ impl Browser {
         }
     }
 
+    // the "Use as ... folder" buttons' (none on the web)
+    #[cfg(not(target_arch = "wasm32"))]
     fn save_settings(&mut self, settings: &mut Settings) {
         if let Err(e) = settings.save() {
             self.failures.push(e);
@@ -1160,7 +1181,8 @@ fn expand_home(s: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
-fn human_size(n: u64) -> String {
+/// A file size as the browser lists it (also the web page's download dialog).
+pub(crate) fn human_size(n: u64) -> String {
     if n < 10_000 {
         format!("{n} B")
     } else if n < 10_000_000 {
