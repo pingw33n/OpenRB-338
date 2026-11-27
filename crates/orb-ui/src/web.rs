@@ -126,6 +126,101 @@ pub fn set_unsaved(unsaved: bool) {
     }
 }
 
+// ---- the address bar and the History API (task-326) ------------------------------------------
+
+/// What the page's links need of the app (`App::web_nav_frame`).
+#[derive(Default)]
+pub struct WebNav {
+    /// The document number the address was last made for.
+    pub(crate) seen: u64,
+    /// The link of the open document: a collection song (with the collection mod it plays when
+    /// that is not the one it resolves to), a collection mod's demo song, or none.
+    pub(crate) doc_link: Option<crate::collection::Link>,
+    /// The collection mod whose demo song was just opened (`App::open_demo_inner`).
+    pub(crate) demo_of: Option<PathBuf>,
+    /// The collection mod whose demo song is the open document (taken from `demo_of` when the
+    /// document changes).
+    pub(crate) demo: Option<PathBuf>,
+    /// A link's song and the mod it names (`?song=&mod=`): the mod is used once that song is
+    /// the document.
+    pub(crate) pending_mod: Option<(PathBuf, PathBuf)>,
+    /// The link the page was loaded with, until the index is read and it is opened.
+    pub(crate) initial: Option<crate::collection::Link>,
+    /// While a Back or Forward is being followed: the history entry it left.
+    pub(crate) from: Option<i64>,
+}
+
+thread_local! {
+    /// The number of the history entry shown: each entry this page pushes has its number in its
+    /// state (`{n}`), so a Back or Forward knows its direction and size.
+    static HIST_N: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
+
+fn history() -> Option<web_sys::History> {
+    window()?.history().ok()
+}
+
+/// The page's query string (`?song=...`), or "".
+fn location_search() -> String {
+    window()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default()
+}
+
+fn state_n(state: &JsValue) -> i64 {
+    js_sys::Reflect::get(state, &"n".into())
+        .ok()
+        .and_then(|n| n.as_f64())
+        .unwrap_or(0.0) as i64
+}
+
+fn history_n() -> i64 {
+    history()
+        .and_then(|h| h.state().ok())
+        .map_or(0, |s| state_n(&s))
+}
+
+/// Makes the address `query` on the page's path: a new history entry (`push`) or the current
+/// one replaced.
+fn set_url(query: &str, push: bool) {
+    let (Some(w), Some(h)) = (window(), history()) else {
+        return;
+    };
+    let Ok(path) = w.location().pathname() else {
+        return;
+    };
+    let n = if push { HIST_N.get() + 1 } else { HIST_N.get() };
+    let state = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&state, &"n".into(), &(n as f64).into());
+    let url = format!("{path}{query}");
+    let r = if push {
+        h.push_state_with_url(&state, "", Some(&url))
+    } else {
+        h.replace_state_with_url(&state, "", Some(&url))
+    };
+    match r {
+        Ok(()) => HIST_N.set(n),
+        Err(e) => {
+            web_sys::console::warn_1(&format!("OpenRB-338: the address: {}", js_text(e)).into())
+        }
+    }
+}
+
+/// Reports every Back and Forward (`Picked::Popstate`).
+fn listen_popstate() {
+    let Some(w) = window() else {
+        return;
+    };
+    let f = Closure::<dyn Fn(web_sys::PopStateEvent)>::new(|e: web_sys::PopStateEvent| {
+        picked(Picked::Popstate(
+            crate::collection::Link::parse(&location_search()),
+            state_n(&e.state()),
+        ));
+    });
+    let _ = w.add_event_listener_with_callback("popstate", f.as_ref().unchecked_ref());
+    f.forget();
+}
+
 // ---- the loading screen ----------------------------------------------------------------------
 
 thread_local! {
@@ -281,6 +376,13 @@ pub enum Picked {
     /// A song whose unsaved-changes question was answered, once it and its mod are read
     /// (`App::web_fetch_and_open`).
     OpenNow(PathBuf),
+    /// The demo song of this collection mod, once the mod is read (a `?mod=` link).
+    Demo(PathBuf),
+    /// This collection mod is the mod of the song a link opened, once the mod is read.
+    LinkMod(PathBuf),
+    /// The browser went Back or Forward (the History API): the link the address names now and
+    /// the number of the history entry (`WebNav`).
+    Popstate(Option<crate::collection::Link>, i64),
     Mod(PathBuf),
     /// The folder and the number of mods (`.rbm` files) in it.
     ModsFolder(PathBuf, usize),
@@ -849,6 +951,20 @@ pub async fn start(canvas: web_sys::HtmlCanvasElement, worklet_url: &str) -> Res
         .and_then(|w| w.location().search().ok())
         .is_some_and(|q| q.split(['?', '&']).any(|p| p == "debug-panic"));
     let mut settings = crate::settings::Settings::load();
+    // ?skin=classic or ?skin=modern: this load's skin, not the saved setting (task-326)
+    let search = location_search();
+    match crate::settings::Theme::from_query(&search) {
+        Ok(Some(t)) => {
+            settings.set_theme_for_session(t);
+        }
+        Ok(None) => {}
+        Err(v) => web_sys::console::warn_1(
+            &format!("OpenRB-338: ?skin={v}: not a skin (classic or modern), ignored").into(),
+        ),
+    }
+    let initial_link = crate::collection::Link::parse(&search);
+    HIST_N.set(history_n());
+    listen_popstate();
     // the mods source of a page load is the mod collection (the user's decision of
     // 2026-11-27): a picked mods folder is for its session only, and the collection's mods
     // join the folder when the index is read (`load_index`)
@@ -882,6 +998,7 @@ pub async fn start(canvas: web_sys::HtmlCanvasElement, worklet_url: &str) -> Res
                 app.enable_logo_anim();
                 app.settings = settings;
                 app.web_debug_panic = debug_panic;
+                app.web_nav.initial = initial_link;
                 app.action(|app| app.start(None));
                 Ok(Box::new(app))
             }),
@@ -932,7 +1049,8 @@ impl crate::app::App {
                 });
             });
         }
-        set_title(&self.title_text());
+        set_title(&self.page_title_text());
+        self.web_nav_frame();
         set_unsaved(self.doc.modified);
         if let Some(link) = &mut self.link {
             let p = link.player();
@@ -1033,6 +1151,9 @@ impl crate::app::App {
         match p {
             Picked::Song(path) => self.web_open_song(&path),
             Picked::OpenNow(path) => self.web_fetch_and_open(&path),
+            Picked::Demo(path) => self.web_demo_of(&path),
+            Picked::LinkMod(path) => self.web_link_mod(&path),
+            Picked::Popstate(link, n) => self.web_popstate(link, n),
             Picked::Command(cmd) => self.command(cmd),
             Picked::Status(s) => self.status = Some(s),
             Picked::Collection(r) => self.web_collection_read(r),
@@ -1112,7 +1233,7 @@ impl crate::app::App {
 
 /// The mod collection's folder in memory: the Mods folder of a page load.
 pub const COLLECTION_MODS: &str = crate::collection::MODS_FOLDER;
-/// The song collection's folder in memory: where File > Open Collection... starts.
+/// The song collection's folder in memory: where File > Open from Collection... starts.
 pub const COLLECTION_SONGS: &str = crate::collection::SONGS_FOLDER;
 /// The index of the collections, next to the page (`scripts/build-web.sh --index`).
 const INDEX_URL: &str = "index.json";
@@ -1144,6 +1265,8 @@ struct Download {
 thread_local! {
     static COLLECTION: RefCell<CollectionState> = const { RefCell::new(CollectionState::Loading) };
     static DOWNLOAD: RefCell<Option<Download>> = const { RefCell::new(None) };
+    /// The collection index, kept for the random song and the links (task-326).
+    static INDEX: RefCell<Option<crate::collection::Index>> = const { RefCell::new(None) };
     static SERIAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// For the checks ([`state`]): files taken from the cache, files downloaded, downloads
     /// cancelled.
@@ -1214,7 +1337,9 @@ fn load_index() {
                 .unwrap_or_default();
             let index =
                 crate::collection::Index::parse(&text).map_err(|e| format!("{INDEX_URL}: {e}"))?;
-            Ok::<_, String>(enter_index(&index))
+            let n = enter_index(&index);
+            INDEX.with_borrow_mut(|i| *i = Some(index));
+            Ok::<_, String>(n)
         }
         .await;
         COLLECTION.with_borrow_mut(|c| {
@@ -1515,9 +1640,283 @@ impl crate::app::App {
         if r.is_ok() && self.settings.mods_dir.as_deref() == Some(Path::new(COLLECTION_MODS)) {
             self.refresh_mods();
         }
+        // the page's link (`?song=`, `?mod=`) opens now that the index is here
+        if let Some(link) = self.web_nav.initial.take() {
+            self.web_nav.from = Some(HIST_N.get());
+            // (the start's own document is not the link's: the address stays until it opens)
+            self.web_nav.seen = self.doc_serial;
+            match r {
+                Ok(_) => self.web_open_link(link),
+                Err(e) => self.fail(format!(
+                    "The link cannot be opened, the collection is not available: {e}"
+                )),
+            }
+        }
     }
 
-    /// File > Open Collection...: the in-app browser on the song collection, in the folder of
+    /// Opens what a link names, through the normal open path (the unsaved-changes prompt first
+    /// for a song): a song of the collection (with `mod`, that mod of the collection once the
+    /// song is open), or, with no song, the demo song of a mod of the collection (the mod is
+    /// downloaded first). A path the index does not list, a file it could not read, or a mod
+    /// with no demo song shows a message and changes nothing else.
+    pub fn web_open_link(&mut self, link: crate::collection::Link) {
+        type Found = Result<(Option<PathBuf>, Option<PathBuf>), String>;
+        let found: Found = INDEX.with_borrow(|i| {
+            let Some(i) = i else {
+                return Err("The collection index is not available".to_string());
+            };
+            let song = match &link.song {
+                None => None,
+                Some(p) => match i.song(p) {
+                    None => {
+                        return Err(format!(
+                            "The link names a song that is not in the collection: {p}"
+                        ));
+                    }
+                    Some(s) => match &s.error {
+                        Some(e) => {
+                            return Err(format!(
+                                "{}: the song cannot be opened: {e}",
+                                s.file.name()
+                            ));
+                        }
+                        None => Some(s.file.mem_path()),
+                    },
+                },
+            };
+            let md = match &link.mod_ {
+                None => None,
+                Some(p) => match i.mod_at(p) {
+                    None => {
+                        return Err(format!(
+                            "The link names a mod that is not in the collection: {p}"
+                        ));
+                    }
+                    Some(m) => match &m.error {
+                        Some(e) => {
+                            return Err(format!("{}: the mod cannot be read: {e}", m.file.name()));
+                        }
+                        None => Some(m.file.mem_path()),
+                    },
+                },
+            };
+            Ok((song, md))
+        });
+        match found {
+            Err(e) => self.fail(e),
+            Ok((Some(song), md)) => {
+                self.web_nav.pending_mod = md.map(|m| (song.clone(), m));
+                self.web_open_song(&song);
+            }
+            Ok((None, Some(path))) => {
+                if orb_cli::fs::is_lazy(&path) {
+                    self.web_load_then(path.clone(), Picked::Demo(path));
+                } else {
+                    self.web_demo_of(&path);
+                }
+            }
+            Ok((None, None)) => {}
+        }
+    }
+
+    /// The mod of a link's song (`?song=&mod=`) is read: it becomes the song's mod, and the
+    /// song stays unmodified (the link, not an edit, chose it).
+    pub fn web_link_mod(&mut self, path: &Path) {
+        use orb_cli::mods::Kit;
+        self.use_kit(Kit::Mod(path.to_path_buf()));
+        if self.doc.kit == Kit::Mod(path.to_path_buf()) {
+            self.doc.modified = false;
+        }
+    }
+
+    /// The link of the open document (`None` for a local file, New, a drop): a collection song,
+    /// with `mod` when its mod is a collection mod other than the one the song resolves to by
+    /// itself (the first of the index's `mod_variants`; a mod of the computer, or the built-in
+    /// kit where the song resolves to a mod, cannot be named by a link); or a collection mod's
+    /// demo song.
+    fn web_doc_link(&self) -> Option<crate::collection::Link> {
+        use crate::collection::Link;
+        if let Some(m) = &self.web_nav.demo {
+            return Some(Link {
+                song: None,
+                mod_: Some(Link::mod_of_mem_path(m)?),
+            });
+        }
+        let song = Link::song_of_mem_path(self.doc.path.as_deref()?)?;
+        let mod_ = match &self.doc.kit {
+            orb_cli::mods::Kit::Mod(p) => Link::mod_of_mem_path(p).filter(|m| {
+                INDEX.with_borrow(|i| {
+                    let default = i
+                        .as_ref()
+                        .and_then(|i| i.song(&song).and_then(|s| i.default_mod(s)));
+                    default.map(|d| d.file.path.as_str()) != Some(m.as_str())
+                })
+            }),
+            orb_cli::mods::Kit::Standard => None,
+        };
+        Some(Link {
+            song: Some(song),
+            mod_,
+        })
+    }
+
+    /// Opens the demo song of the mod file `path` (read): the unsaved-changes prompt first,
+    /// as Mods > Demo Song does.
+    pub fn web_demo_of(&mut self, path: &Path) {
+        if !crate::session::mod_has_demo(path) {
+            self.fail(format!("{}: this mod has no demo song", file_name(path)));
+        } else if self.asks_to_save() {
+            self.prompt = Some(crate::menu::Then::Demo(path.to_path_buf()));
+        } else {
+            self.open_demo_now(path);
+        }
+    }
+
+    /// File > Open from Collection (Random) (task-326): a song chosen uniformly among those
+    /// the index says can open (no read error, a mod that resolves: the built-in kit, one of
+    /// the collection, or, with a mods folder of the computer in use, one that folder has),
+    /// not the open song, opened as the browser's choice is.
+    pub fn web_open_random(&mut self) {
+        match COLLECTION.with_borrow(|c| c.clone()) {
+            CollectionState::Ready(..) => {}
+            CollectionState::Loading => {
+                self.status =
+                    Some("The collection index is still loading; try again in a moment".into());
+                return;
+            }
+            CollectionState::Failed(e) => {
+                self.fail(format!("The collection is not available: {e}"));
+                load_index();
+                return;
+            }
+        }
+        let current = self
+            .doc
+            .path
+            .as_deref()
+            .and_then(crate::collection::Link::song_of_mem_path);
+        let local = !crate::collection::is_mods_folder(self.settings.mods_dir.as_deref());
+        let mut memo = std::collections::HashMap::<String, bool>::new();
+        let mut lookup = |name: &str| {
+            *memo
+                .entry(name.to_string())
+                .or_insert_with(|| self.resolve_mod_file(name).is_ok_and(|m| m.is_some()))
+        };
+        let r = js_sys::Math::random();
+        let path = INDEX.with_borrow(|i| {
+            let local: Option<&mut dyn FnMut(&str) -> bool> =
+                if local { Some(&mut lookup) } else { None };
+            i.as_ref()?
+                .random_song(local, current.as_deref(), r)
+                .map(|s| s.file.mem_path())
+        });
+        match path {
+            Some(p) => self.web_open_song(&p),
+            None => self.status = Some("No song of the collection can be opened".into()),
+        }
+    }
+
+    /// The browser went Back or Forward to the history entry `n` (task-326): the song its link
+    /// names opens through the normal path (an entry with no link is File > New), unless that
+    /// song is open already. A song that does not open (the prompt cancelled, a failed
+    /// download) sends the browser back to the entry it left ([`App::web_nav_frame`]).
+    fn web_popstate(&mut self, link: Option<crate::collection::Link>, n: i64) {
+        let from = HIST_N.replace(n);
+        if link == self.web_nav.doc_link {
+            return;
+        }
+        self.web_nav.from = Some(from);
+        match link {
+            Some(l) => self.web_open_link(l),
+            None => self.command(crate::menu::Cmd::New),
+        }
+    }
+
+    /// The address bar follows the page (task-326, `docs/web.md` section 9.4), each frame:
+    /// - a new document: a collection song or mod demo is pushed as a history entry (Back and
+    ///   Forward go between them); a local file or New removes the link (replaced, no entry); a
+    ///   link's `mod` is applied once its song is open;
+    /// - a change of the song's mod (Mods menu, a collection mod chosen, a variant): `mod` is set,
+    ///   or removed when it is the mod the song resolves to by itself (replaced, no entry);
+    /// - `?skin=` names the skin shown, replaced (no entry) when View switches it;
+    /// - a Back or Forward whose song did not open (settled: no prompt, download or read left) goes
+    ///   back to the entry it left.
+    fn web_nav_frame(&mut self) {
+        use crate::collection::{Link, with_skin};
+        let q = location_search();
+        let cur = Link::parse(&q);
+        let mut want = cur.clone();
+        let mut push = false;
+        let mut new_doc = false;
+        if self.doc_serial != self.web_nav.seen {
+            self.web_nav.seen = self.doc_serial;
+            // (the first documents of a load wait for the page's own link to be opened)
+            if self.web_nav.initial.is_none() {
+                new_doc = true;
+                self.web_nav.demo = self.web_nav.demo_of.take();
+                let pending = self
+                    .web_nav
+                    .pending_mod
+                    .take()
+                    .filter(|(s, _)| self.doc.path.as_deref() == Some(s.as_path()));
+                if let Some((_, m)) = pending {
+                    // the address keeps the link's mod while it is applied
+                    if orb_cli::fs::is_lazy(&m) {
+                        self.web_load_then(m.clone(), Picked::LinkMod(m));
+                    } else {
+                        self.web_link_mod(&m);
+                    }
+                } else {
+                    let link = self.web_doc_link();
+                    push = link.is_some() && link != cur;
+                    want = link;
+                }
+            }
+        }
+        let doc_link = self.web_doc_link();
+        let reading = self
+            .status
+            .as_deref()
+            .is_some_and(|s| s.starts_with("Reading "));
+        if !new_doc
+            && doc_link != cur
+            && !self.asking()
+            && !reading
+            && self.web_nav.pending_mod.is_none()
+            && self.web_nav.from.is_none()
+            && self.web_nav.initial.is_none()
+        {
+            // the song's mod changed, or the document is not what the address names
+            want = doc_link.clone();
+        }
+        self.web_nav.doc_link = doc_link;
+        let target = with_skin(&Link::with_link(&q, want.as_ref()), self.theme().name());
+        if target != q {
+            set_url(&target, push);
+        }
+        if let Some(from) = self.web_nav.from
+            && !self.asking()
+            && !reading
+            && self.web_nav.initial.is_none()
+        {
+            self.web_nav.from = None;
+            self.web_nav.pending_mod = None;
+            if Link::parse(&location_search()) != self.web_nav.doc_link {
+                let at = HIST_N.get();
+                if from != at {
+                    if let Some(h) = history() {
+                        let _ = h.go_with_delta((from - at) as i32);
+                    }
+                } else {
+                    let q = location_search();
+                    let t = Link::with_link(&q, self.web_nav.doc_link.as_ref());
+                    set_url(&with_skin(&t, self.theme().name()), false);
+                }
+            }
+        }
+    }
+
+    /// File > Open from Collection...: the in-app browser on the song collection, in the folder of
     /// the last song chosen there. While the index loads, or when it could not be read, a
     /// message says so (and a failed index is asked for again).
     pub fn web_open_collection(&mut self) {

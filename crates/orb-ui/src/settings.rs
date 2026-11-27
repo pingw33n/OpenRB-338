@@ -168,6 +168,40 @@ impl Theme {
             _ => None,
         }
     }
+
+    /// The skin the page's query asks for (`?skin=classic` or `?skin=modern`, task-326): none
+    /// without the parameter, an error with the value when it is neither. The first `skin`
+    /// parameter counts.
+    pub fn from_query(query: &str) -> Result<Option<Self>, String> {
+        for pair in query.trim_start_matches('?').split('&') {
+            if let Some(v) = pair.strip_prefix("skin=") {
+                return Self::from_name(v).map(Some).ok_or_else(|| v.to_string());
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod skin_query_tests {
+    use super::Theme;
+
+    #[test]
+    fn the_skin_parameter_is_read() {
+        assert_eq!(Theme::from_query("?skin=classic"), Ok(Some(Theme::Classic)));
+        assert_eq!(
+            Theme::from_query("?song=a&skin=modern"),
+            Ok(Some(Theme::Modern))
+        );
+        assert_eq!(
+            Theme::from_query("skin=classic&skin=modern"),
+            Ok(Some(Theme::Classic))
+        );
+        assert_eq!(Theme::from_query("?song=a"), Ok(None));
+        assert_eq!(Theme::from_query(""), Ok(None));
+        assert_eq!(Theme::from_query("?skin=Classic"), Err("Classic".into()));
+        assert_eq!(Theme::from_query("?skin="), Err(String::new()));
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -719,6 +753,14 @@ impl Settings {
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
         self.dirty.insert("theme".into());
+    }
+
+    /// Sets the skin for this run only (the page's `?skin=`, task-326): it is also the base, so
+    /// no save writes it (the file keeps its `theme`) until View switches the skin
+    /// ([`Settings::set_theme`]).
+    pub fn set_theme_for_session(&mut self, theme: Theme) {
+        self.theme = theme;
+        self.base.theme = theme;
     }
 
     /// Sets the audio output choice (`audio_*`, task-191); the next save writes it whatever the

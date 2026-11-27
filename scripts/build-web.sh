@@ -4,7 +4,7 @@
 # orb-ui on eframe's web runner, through wasm-bindgen) for wasm32-unknown-unknown in release,
 # and writes the static site to dist/web/:
 #
-#   index.html  favicon.ico  orb_worklet.wasm  pkg/orb_web.js  pkg/orb_web_bg.wasm
+#   index.html  img/ (the icons)  orb_worklet.wasm  pkg/orb_web.js  pkg/orb_web_bg.wasm
 #
 # Every URL in it is relative, so it can be served from any path (GitHub Pages serves the
 # project site under /OpenRB-338/). With --serve it then serves dist/web/ at
@@ -14,7 +14,7 @@
 #   scripts/build-web.sh [--index FILE] [--serve [PORT]]
 #
 # --index FILE copies FILE (the collection index `orb web-index` writes, docs/web.md section 8)
-# into the site as index.json, which the page fetches for File > Open Collection... and the mod
+# into the site as index.json, which the page fetches for File > Open from Collection... and the mod
 # collection (task-174, docs/web.md section 9). Without it the site has no index and the page
 # has no collections.
 #
@@ -77,7 +77,9 @@ wasm-bindgen --target web --no-typescript --out-dir "$out/pkg" "$wasm/orb_web.wa
 wasm_opt="$(scripts/binaryen.sh)"
 "$wasm_opt" -O3 -g --enable-simd "$out/pkg/orb_web_bg.wasm" -o "$out/pkg/orb_web_bg.wasm"
 cp crates/orb-web/index.html "$out/"
-cp assets/app_icon.ico "$out/favicon.ico"
+# the landing page's icon files, under the same tags (site/index.html), relative to the page
+mkdir -p "$out/img"
+cp site/img/favicon.svg site/img/favicon-32.png site/img/apple-touch-icon.png "$out/img/"
 if [[ -n "$index" ]]; then
     cp "$index" "$out/index.json"
 fi

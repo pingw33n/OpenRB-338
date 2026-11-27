@@ -20,7 +20,7 @@ pub const MODS_ROOT: &str = "/rb-mods";
 /// The memory folder of the mod collection's mods: the Mods folder of a web page load
 /// (`docs/web.md` section 9).
 pub const MODS_FOLDER: &str = "/rb-mods/mods";
-/// The memory folder of the song collection's songs: where File > Open Collection... starts.
+/// The memory folder of the song collection's songs: where File > Open from Collection... starts.
 pub const SONGS_FOLDER: &str = "/rb-songs/songs";
 
 /// Whether the Mods folder `dir` is the mod collection (Mods > Use Collection is checked).
@@ -323,6 +323,182 @@ pub fn encode_path(path: &str) -> String {
     out
 }
 
+// ---- opening from the index: the random song and the links -----------------------------------
+
+impl Song {
+    /// Whether the song can be opened, by what the index says (no download): orb read it, the
+    /// index has its hash, and its mod resolves. With `local` (a mods folder of the computer is
+    /// in use) a mod resolves when `local` finds it by INFO name; else it does when it is the
+    /// built-in kit (`mod_name` is the standard mod's, `docs/web.md` section 8.1) or the
+    /// collection has a mod of that name (`mod_variants` is not empty).
+    pub fn can_open(&self, local: &mut Option<&mut dyn FnMut(&str) -> bool>) -> bool {
+        if self.error.is_some() || self.file.sha256.is_none() || self.file.size.is_none() {
+            return false;
+        }
+        match (self.mod_name.as_deref(), local.as_mut()) {
+            (Some(rbm::standard::NAME), _) => true,
+            (Some(name), Some(f)) => f(name),
+            (Some(_), None) => !self.mod_variants.is_empty(),
+            (None, _) => false,
+        }
+    }
+}
+
+impl Index {
+    /// The song of the index at `path` (the path in the repository: `songs/Folder/Song.rbs`).
+    pub fn song(&self, path: &str) -> Option<&Song> {
+        self.songs.iter().find(|s| s.file.path == path)
+    }
+
+    /// The mod `song` resolves to by itself (the first of its `mod_variants`: what `orb render`
+    /// loads, and what a link to the song opens); none for the built-in kit or a mod the
+    /// collection lacks.
+    pub fn default_mod(&self, song: &Song) -> Option<&Mod> {
+        self.mods.get(*song.mod_variants.first()?)
+    }
+
+    /// The mod of the index at `path` (`mods/Mod.rbm`).
+    pub fn mod_at(&self, path: &str) -> Option<&Mod> {
+        self.mods.iter().find(|m| m.file.path == path)
+    }
+
+    /// File > Open from Collection (Random): one song chosen uniformly among those that
+    /// [`Song::can_open`], not `current` (a song's path in the repository, the one open) unless
+    /// it is the only one. `r` is a random number in `[0, 1)`; none when no song can open.
+    pub fn random_song(
+        &self,
+        mut local: Option<&mut dyn FnMut(&str) -> bool>,
+        current: Option<&str>,
+        r: f64,
+    ) -> Option<&Song> {
+        let mut all: Vec<&Song> = self
+            .songs
+            .iter()
+            .filter(|s| s.can_open(&mut local))
+            .collect();
+        if all.len() > 1 {
+            all.retain(|s| Some(s.file.path.as_str()) != current);
+        }
+        let i = ((r * all.len() as f64) as usize).min(all.len().saturating_sub(1));
+        all.get(i).copied()
+    }
+}
+
+/// What the page's address names (`?song=` and `?mod=`, `docs/web.md` section 9.4), each by its
+/// path in the index (stable across commits of the collections):
+/// - `song` only: that song of the song collection, with the mod it resolves to;
+/// - `song` and `mod`: the song with that mod of the mod collection instead;
+/// - `mod` only: the demo song of that mod (Mods > Demo Song).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Link {
+    /// The song's path in the repository: `songs/Folder/Song.rbs`.
+    pub song: Option<String>,
+    /// The mod's path in the repository: `mods/Mod.rbm`.
+    pub mod_: Option<String>,
+}
+
+impl Link {
+    /// The link a query string (`?song=...&mod=...`, with or without the `?`) holds: its first
+    /// `song` and its first `mod` parameter, percent-decoded. A path may be empty or unknown:
+    /// the lookup in the index says so. None when it has neither.
+    pub fn parse(query: &str) -> Option<Link> {
+        let mut link = Link::default();
+        for pair in query.trim_start_matches('?').split('&') {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            match k {
+                "song" if link.song.is_none() => link.song = Some(decode(v)),
+                "mod" if link.mod_.is_none() => link.mod_ = Some(decode(v)),
+                _ => {}
+            }
+        }
+        (link.song.is_some() || link.mod_.is_some()).then_some(link)
+    }
+
+    /// The song's path in the repository of a file of the memory file system (`/rb-songs/...`);
+    /// None for any other path.
+    pub fn song_of_mem_path(path: &std::path::Path) -> Option<String> {
+        let p = path.to_str()?;
+        Some(p.strip_prefix(SONGS_ROOT)?.strip_prefix('/')?.into())
+    }
+
+    /// The mod's path in the repository of a file of the memory file system (`/rb-mods/...`);
+    /// None for any other path (a mod of the computer has no link).
+    pub fn mod_of_mem_path(path: &std::path::Path) -> Option<String> {
+        let p = path.to_str()?;
+        Some(p.strip_prefix(MODS_ROOT)?.strip_prefix('/')?.into())
+    }
+
+    /// The parameters, with the paths percent-encoded and `/` kept.
+    fn params(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if let Some(s) = &self.song {
+            v.push(format!("song={}", encode_path(s)));
+        }
+        if let Some(m) = &self.mod_ {
+            v.push(format!("mod={}", encode_path(m)));
+        }
+        v
+    }
+
+    /// `query` with its link parameters replaced by `link` (or removed, for `None`); the other
+    /// parameters stay. Gives the new query with its `?`, or "" when it is empty.
+    pub fn with_link(query: &str, link: Option<&Link>) -> String {
+        replace_params(
+            query,
+            &["song", "mod"],
+            link.map(Link::params).unwrap_or_default(),
+        )
+    }
+}
+
+/// `query` with its `skin` parameter set to `skin` (`modern` or `classic`, task-326; the
+/// address always names the skin shown); the other parameters stay.
+pub fn with_skin(query: &str, skin: &str) -> String {
+    replace_params(query, &["skin"], vec![format!("skin={skin}")])
+}
+
+/// `query` without the parameters named `keys`, then with `add` at the end.
+fn replace_params(query: &str, keys: &[&str], add: Vec<String>) -> String {
+    let mut parts: Vec<String> = query
+        .trim_start_matches('?')
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .filter(|p| !keys.contains(&p.split('=').next().unwrap_or("")))
+        .map(String::from)
+        .collect();
+    parts.extend(add);
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", parts.join("&"))
+    }
+}
+
+/// Percent-decodes a query value (`+` is a space); bytes that are not UTF-8 become U+FFFD.
+fn decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let hex = |c: u8| (c as char).to_digit(16);
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() && hex(b[i + 1]).is_some() && hex(b[i + 2]).is_some() => {
+                out.push((hex(b[i + 1]).unwrap() * 16 + hex(b[i + 2]).unwrap()) as u8);
+                i += 3;
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /// Base64url without padding, as the index writes a hash.
@@ -599,5 +775,169 @@ mod tests {
         assert_eq!(m.file.size, Some(std_mod.len() as u64));
         m.file.check(&std_mod).unwrap();
         assert!(m.file.url().unwrap().ends_with("/rb-mods/def/mods/Std.rbm"));
+    }
+
+    fn song(path: &str, mod_name: Option<&str>, variants: &[usize], error: bool) -> Song {
+        Song {
+            file: File {
+                repo: "rb-songs".into(),
+                path: path.into(),
+                size: (!error).then_some(1),
+                sha256: (!error).then_some([0; 32]),
+                raw_base: None,
+            },
+            error: error.then(|| "cannot read".to_string()),
+            mod_name: mod_name.map(String::from),
+            mod_variants: variants.to_vec(),
+        }
+    }
+
+    fn many() -> Index {
+        Index {
+            songs: vec![
+                song("songs/a.rbs", Some("Standard ReBirth"), &[], false),
+                song("songs/b.rbs", Some("M"), &[0], false),
+                song("songs/c.rbs", Some("Missing"), &[], false),
+                song("songs/d.rbs", Some("M"), &[0], true),
+                song("songs/e.rbs", Some("M"), &[0], false),
+            ],
+            ..Index::default()
+        }
+    }
+
+    #[test]
+    fn random_picks_only_songs_that_can_open_and_not_the_open_one() {
+        let i = many();
+        // a, b, e can open (c: its mod is not in the collection; d: a read error)
+        let at = |r: f64, cur: Option<&str>| {
+            i.random_song(None, cur, r)
+                .map(|s| s.file.path.clone())
+                .unwrap()
+        };
+        assert_eq!(at(0.0, None), "songs/a.rbs");
+        assert_eq!(at(0.5, None), "songs/b.rbs");
+        assert_eq!(at(0.999, None), "songs/e.rbs");
+        // uniform over the candidates: every one of them at its share of [0, 1)
+        let mut n = std::collections::HashMap::new();
+        for k in 0..300 {
+            *n.entry(at(k as f64 / 300.0, None)).or_insert(0) += 1;
+        }
+        assert_eq!(n.len(), 3);
+        assert!(n.values().all(|&c| c == 100));
+        // not the open song
+        for k in 0..30 {
+            assert_ne!(at(k as f64 / 30.0, Some("songs/b.rbs")), "songs/b.rbs");
+        }
+        // a mods folder of the computer decides by its lookup: only "Missing" is there
+        let mut local = |name: &str| name == "Missing";
+        let s = i.random_song(Some(&mut local), None, 0.7).unwrap();
+        assert_eq!(s.file.path, "songs/c.rbs");
+        // the open song is the only one that can open: it is the answer
+        let one = Index {
+            songs: vec![i.songs[0].clone(), i.songs[3].clone()],
+            ..Index::default()
+        };
+        let s = one.random_song(None, Some("songs/a.rbs"), 0.3).unwrap();
+        assert_eq!(s.file.path, "songs/a.rbs");
+        // none can open
+        let none = Index {
+            songs: vec![i.songs[3].clone()],
+            ..Index::default()
+        };
+        assert!(none.random_song(None, None, 0.3).is_none());
+    }
+
+    #[test]
+    fn links_parse_and_write() {
+        let song = |p: &str| Link {
+            song: Some(p.into()),
+            mod_: None,
+        };
+        assert_eq!(
+            Link::parse("?song=songs%2FA%20b%2Fx%26y.rbs"),
+            Some(song("songs/A b/x&y.rbs"))
+        );
+        assert_eq!(
+            Link::parse("song=songs/a+b.rbs&x=1"),
+            Some(song("songs/a b.rbs"))
+        );
+        // a song and a mod, a mod alone (its demo); the old ?mod-demo= is not a link
+        assert_eq!(
+            Link::parse("?debug-panic&mod=mods%2FM.rbm&song=x"),
+            Some(Link {
+                song: Some("x".into()),
+                mod_: Some("mods/M.rbm".into())
+            })
+        );
+        assert_eq!(
+            Link::parse("?mod=mods%2FM.rbm"),
+            Some(Link {
+                song: None,
+                mod_: Some("mods/M.rbm".into())
+            })
+        );
+        assert_eq!(Link::parse("?mod-demo=mods%2FM.rbm"), None);
+        assert_eq!(Link::parse("?song="), Some(song("")));
+        assert_eq!(Link::parse("?debug-panic"), None);
+        assert_eq!(Link::parse(""), None);
+        // a bad escape stays as it is; bytes that are not UTF-8 do not fail
+        assert_eq!(Link::parse("?song=100%"), Some(song("100%")));
+        assert_eq!(Link::parse("?song=%ZZ"), Some(song("%ZZ")));
+        assert_eq!(Link::parse("?song=%FF"), Some(song("\u{fffd}")));
+        // written: encoded, '/' kept, other parameters kept, the old link replaced
+        let l = Link {
+            song: Some("songs/A b/x&y+z.rbs".into()),
+            mod_: Some("mods/M 1.rbm".into()),
+        };
+        let q = Link::with_link("?debug-panic", Some(&l));
+        assert_eq!(
+            q,
+            "?debug-panic&song=songs/A%20b/x%26y%2Bz.rbs&mod=mods/M%201.rbm"
+        );
+        assert_eq!(Link::parse(&q), Some(l.clone()));
+        assert_eq!(Link::with_link(&q, None), "?debug-panic");
+        assert_eq!(Link::with_link("?song=a&mod=b", None), "");
+        let m = Link {
+            song: None,
+            mod_: Some("mods/M.rbm".into()),
+        };
+        assert_eq!(
+            Link::with_link("?song=a&mod=b", Some(&m)),
+            "?mod=mods/M.rbm"
+        );
+        // the skin parameter: set, replaced, the others kept
+        assert_eq!(with_skin("", "classic"), "?skin=classic");
+        assert_eq!(
+            with_skin("?skin=bad&song=a&x", "modern"),
+            "?song=a&x&skin=modern"
+        );
+        // the memory paths
+        let p = std::path::Path::new("/rb-songs/songs/A b/x.rbs");
+        assert_eq!(
+            Link::song_of_mem_path(p).as_deref(),
+            Some("songs/A b/x.rbs")
+        );
+        assert_eq!(Link::mod_of_mem_path(p), None);
+        let m = std::path::Path::new("/rb-mods/mods/M.rbm");
+        assert_eq!(Link::mod_of_mem_path(m).as_deref(), Some("mods/M.rbm"));
+        let local = std::path::Path::new("/Songs/x.rbs");
+        assert_eq!(Link::song_of_mem_path(local), None);
+        assert_eq!(
+            Link::mod_of_mem_path(std::path::Path::new("/Mods/a/M.rbm")),
+            None
+        );
+    }
+
+    #[test]
+    fn the_index_finds_a_song_and_a_mod_by_path() {
+        let i = Index::parse(&index()).unwrap();
+        assert!(i.song("songs/A b/x&y.rbs").is_some());
+        assert!(i.song("songs/nope.rbs").is_none());
+        assert!(i.mod_at("mods/a.rbm").is_some());
+        // the first variant is the mod the song resolves to by itself
+        let d = i.default_mod(i.song("songs/A b/x&y.rbs").unwrap()).unwrap();
+        assert_eq!(d.file.path, "mods/b.rbm");
+        assert!(i.default_mod(i.song("songs/bad.rbs").unwrap()).is_none());
+        assert!(i.mod_at("a.rbm").is_none());
     }
 }

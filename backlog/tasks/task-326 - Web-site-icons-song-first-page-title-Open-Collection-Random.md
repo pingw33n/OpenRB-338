@@ -1,11 +1,11 @@
 ---
 id: TASK-326
 title: 'Web: site icons, song-first page title, Open Collection (Random)'
-status: To Do
+status: Done
 assignee:
   - '@agent-worker'
 created_date: '2026-11-27T15:41:00Z'
-updated_date: '2026-11-27T16:22:00Z'
+updated_date: '2026-11-27T17:17:00Z'
 labels:
   - ui
 milestone: m-6
@@ -36,12 +36,18 @@ Why: three requests from the user (2026-11-27) for the web page (/OpenRB-338/web
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The web page's icons are the landing page's files and tags and look the same in the tab (checked in a browser)
-- [ ] #2 File > Open Collection (Random) and Cmd/Ctrl+Alt+O open a random openable collection song through the normal open path; Cmd+O and Cmd+Shift+O are unaffected (tests for the selection and the shortcut distinction)
-- [ ] #3 The browser check of the shortcut (Chrome; Firefox and Safari by the user) and docs/ui_spec.md section 26 / docs/web.md are updated
-- [ ] #4 The web page's title is '<song> - OpenRB-338', or '<song>* - OpenRB-338' when modified; the native window title is unchanged
-- [ ] #5 Opening a collection song or a mod's demo song puts a shareable link in the address bar (?song= / ?mod-demo=); loading such a link opens it; Back/Forward move between opened collection songs; a local file or New clears the parameter; a bad link shows a message (checked in a browser, tests for the parsing)
+- [x] #1 The web page's icons are the landing page's files and tags and look the same in the tab (checked in a browser)
+- [x] #2 The browser check of the shortcut (Chrome; Firefox and Safari by the user) and docs/ui_spec.md section 26 / docs/web.md are updated
+- [x] #3 The web page's title is '<song> - OpenRB-338', or '<song>* - OpenRB-338' when modified; the native window title is unchanged
+- [x] #4 File > Open from Collection (Random) and Cmd/Ctrl+Shift+Y (the decided shortcut, instead of Cmd/Ctrl+Alt+O) open a random openable collection song through the normal open path; Cmd+O and Cmd+Shift+O are unaffected (tests for the selection and the shortcut distinction)
+- [x] #5 Opening a collection song or a mod's demo song puts a shareable link in the address bar (?song= / ?mod=, the decided form replacing ?mod-demo=); loading such a link opens it; Back/Forward move between opened collection songs; a local file or New clears the parameter; a bad link shows a message (checked in a browser, tests for the parsing)
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Icons: build-web.sh copies the landing page's three icon files to dist/web/img/, same link tags. 2. Title: App::page_title_text, web only. 3. collection.rs: Link (?song=, ?mod=), Song::can_open, Index::random_song, with_skin; tested natively. 4. web.rs: History API (pushState per collection song or mod demo, replaceState for mod/skin changes and clearing, popstate through the normal open path, settle), index kept, Cmd::OpenRandom, ?skin= (this load only). 5. Shortcut Cmd/Ctrl+Shift+Y instead of Cmd/Ctrl+Alt+O (AltGr, Option), consume exact about Alt. 6. Docs: ui_spec 26, web.md 4 and 9.4, building.md. 7. Gates and a Chrome check.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
@@ -64,4 +70,22 @@ Correction (supervisor): the mod's demo song is the Demo.rbs embedded in the mod
 2026-11-27, the user: support ?skin=classic (and ?skin=modern) in the page URL: the page starts in that skin for that load (combinable with ?song= / ?mod-demo=); an unknown value is ignored with a console message; it does not overwrite the saved theme unless the user switches in View; switching skin does not edit the URL.
 
 2026-11-27, the user, replacing 'switching skin does not edit the URL': the link follows the current skin. After load and on every View switch, ?skin=<current> is set with replaceState (no Back entry); ?song=/?mod-demo= pushes carry it along; an unknown value is replaced by the actual skin.
+
+Branch: worktree-agent-a1db8e27f36abe110 (worktree agent-a1db8e27f36abe110)
+
+Evidence (Chrome 157, macOS, local build with an index of rb-songs/rb-mods, 5830 songs, 326 mods; details in docs/web.md 9.4.1 and 9.4.2):
+- Title, load link, push, Back/Forward, Back with an unsaved song then Cancel (the address returns to the open song), bad link (message, link removed), mod demo, Cmd+Shift+Y random, ?skin= (classic/modern, an unknown value ignored with a console warning, the saved theme kept after ?skin=modern, a View switch replaces the URL without a history entry).
+- Shortcut decision: Cmd/Ctrl+Alt+O has the AltGr (Windows/Linux) and macOS Option problems, so per the user's rule it is replaced by Cmd/Ctrl+Shift+Y (docs/web.md 9.4). shortcuts::consume is exact about Alt too. Chrome checks used synthetic keys.
+- Round 1 (the user): ?mod-demo= replaced by ?mod= (alone: the mod's demo; with ?song=: that mod for the song); the link follows a mod change by replaceState (dropped when it is the song's default mod, or has no collection path: a mod of the computer, the built-in kit over a mod-resolving song). Startup sound: browsers wait for a first gesture; orb-player GESTURES widened (pointerup, mousedown, mouseup, click, keyup), no overlay (docs/web.md section 4).
+- The Chrome extension replaces the tab favicon with its own marker, so the tab icon was not compared by the agent; the three tags are the landing page's and the files are served (200).
+- 2026-11-27: the user checked the round-1 build (3551e6f) served from this branch, following the steps for Firefox and Safari (a key press starting the startup sound, Cmd+Shift+Y, ?song=&mod= and the mod change, the tab icon, the title), and said: "looks good". No per-browser detail was reported, so none is recorded.
+- Limitation: a Save at the unsaved prompt followed by a failing Save does not restore the address.
+
+Review round 2 (send back, four fixes): (1) index.html intercepts Y only with Shift held, so plain Ctrl+Y stays the browser's; the docs/web.md 9.4 claim reworded. (2) Known limitations stated in docs/web.md 9.4 and docs/ui_spec.md 26: a failed Save chosen at the unsaved prompt does not restore the address bar; ?mod= asks the unsaved question after the mod download; a mod of the computer cannot be named by a link. (3) AC 2 and AC 5 re-worded to the decided behavior (Cmd/Ctrl+Shift+Y; ?mod= replacing ?mod-demo=) with --remove-ac and --ac, because the user's decisions superseded the original wording (they are now AC 4 and AC 5, checked, same evidence). (4) build-web.sh comment says File > Open from Collection.... Not wrapped: markdown table rows. Gates: cargo test -p orb-ui, clippy native and wasm32, nightly fmt.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Web page: song-first title (<song> - OpenRB-338, * when modified; native title unchanged), the landing page's icons (img/, copied by build-web.sh), File > Open from Collection (Random) on Cmd/Ctrl+Shift+Y (Cmd/Ctrl+Alt+O has the AltGr and Option problems; shortcuts::consume is exact about Alt too), shareable links on the History API (?song=, ?mod=, ?song=&mod=, the link following a mod change, Back/Forward through the normal open path, bad links show a message), ?skin=classic|modern (this load only, the address names the skin shown), and wider audio resume gestures. Menu item renamed Open from Collection... Logic and tests in collection.rs, settings.rs, shortcuts.rs, tests/menu.rs; docs in docs/web.md 4 and 9.4, docs/ui_spec.md 26, docs/building.md. Checked in Chrome 157; the user then checked the round-1 build in Firefox and Safari and approved (looks good). Tests: cargo test --workspace, clippy native and wasm32, nightly fmt. Branch worktree-agent-a1db8e27f36abe110, one commit.
+<!-- SECTION:FINAL_SUMMARY:END -->

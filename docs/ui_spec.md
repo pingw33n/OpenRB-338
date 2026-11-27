@@ -1371,7 +1371,8 @@ the window, `App::menu`; the headless panel tests run without it) and the comman
 |---|---|---|
 | File | New (Ctrl+N, Cmd+N on macOS) | the state of a start without a song argument: the empty Untitled song on the standard mod, unmodified, stopped, the panel at its start values; the startup sound follows the preference (18.1); the settings are kept; playback stops (`Link::load_new`); with unsaved changes the prompt first (task-091; the original's File New opens a template song, section 12) |
 | File | Open... (Ctrl+O, Cmd+O on macOS) | the browser for a song; with unsaved changes the prompt first |
-| File | Open Collection... (Ctrl+Shift+O, Cmd+Shift+O on macOS) | the web page only (section 26): the in-app browser on the song collection; the key does nothing natively, and Ctrl/Cmd+O stays Open |
+| File | Open from Collection... (Ctrl+Shift+O, Cmd+Shift+O on macOS) | the web page only (section 26): the in-app browser on the song collection; the key does nothing natively, and Ctrl/Cmd+O stays Open |
+| File | Open from Collection (Random) (Ctrl+Shift+Y, Cmd+Shift+Y on macOS) | the web page only (section 26): a random song of the song collection that can open; the key does nothing natively |
 | File | Save (Ctrl+S, Cmd+S on macOS) | writes the song's file; a song with none goes to Save As |
 | File | Save As... | the browser for a `.rbs`; the file becomes the song's file |
 | File | Info... (Ctrl+I, Cmd+I on macOS) | opens the Song Information window below, or brings it to the front when it is open (`App::show_info`); disabled without a song, and the key does nothing then (task-310). The key is taken before the panel keys, so the plain I of the pattern-select keys is not triggered by it, and it works while a text field of the window has the focus, as Ctrl/Cmd+O does. A plugin's Info... item stays enabled and has no shortcut text (section 20) |
@@ -2791,7 +2792,7 @@ the keyboard are the standalone app's. What differs:
   The page lists the songs of github.com/pingw33n/rb-songs and the mods of
   github.com/pingw33n/rb-mods from an index deployed next to it, and downloads a file only when
   it is used, from the collections' commit the index names.
-  - **File > Open Collection... (Ctrl+Shift+O, Cmd+Shift+O on macOS; task-324)** opens the
+  - **File > Open from Collection... (Ctrl+Shift+O, Cmd+Shift+O on macOS; task-324)** opens the
     in-app browser (section 17) on the song
     collection: the "Song collection" place, the collection's folders and songs with their
     sizes, the keyboard navigation and type-to-jump as natively, starting in the folder of the
@@ -2804,8 +2805,29 @@ the keyboard are the standalone app's. What differs:
     is taken and does nothing (there is no collection). Shift marks a variant of a command
     (Save As), not a modifier to ignore: `shortcuts::consume` does not take a shortcut without
     Shift while Shift is held, because egui's logical matching ignores an extra Shift (Cmd+Shift+O
-    ran Open, natively and on the web, before task-324). Option/Alt are left to text and to the
+    ran Open, natively and on the web, before task-324). Alt is exact too (task-326); Option/Alt are left to text and to the
     browser's menus.
+  - **File > Open from Collection (Random) (Ctrl+Shift+Y, Cmd+Shift+Y on macOS; task-326)**
+    opens a random song of the collection that can open (no read error in the index and a mod
+    that resolves: the built-in kit, a collection mod, or the picked mods folder's), not the
+    open one, as File > Open from Collection... does (the unsaved prompt first). Not
+    Ctrl/Cmd+Alt+O: Option types a character on macOS and Ctrl+Alt is AltGr on Windows and Linux
+    layouts (docs/web.md 9.4). `shortcuts::consume` is exact about Alt as it is about Shift.
+  - **Links and the title (task-326).** The tab title is `<song> - OpenRB-338`
+    (`<song>* - OpenRB-338` when modified; the native window's title is unchanged). Opening a
+    collection song, or a collection mod's demo song (Mods > Demo Song), puts `?song=<path>` or
+    `?mod=<path>` (the demo) in the address; changing the mod of a collection song adds or
+    removes `&mod=<path>` (no history entry; a mod of the computer cannot be named, so the
+    parameter is dropped); `?song=S&mod=M` opens the song with that mod (a new history entry: Back and Forward go between the songs,
+    through the normal open path); a local file or New removes it. A page loaded with such a link
+    opens it once the index is read; a bad link shows a message. `?skin=classic` or
+    `?skin=modern` starts that skin for that load only (an unknown value is ignored with a console
+    message); the address always names the skin shown and View > Classic / Modern updates it
+    without a history entry. The icons are the landing page's (`img/favicon.svg`,
+    `img/favicon-32.png`, `img/apple-touch-icon.png`). Known limitations: a Save chosen at the
+    unsaved-changes prompt that then fails does not restore the address bar after a Back or
+    Forward; a `?mod=` link (a demo song) asks the unsaved question after the mod download, not
+    before; a mod of the computer cannot be named by a link (docs/web.md 9.4).
   - **The Mods folder of a page load is the mod collection**: the Mods menu lists its mods by
     INFO name, sorted and grouped into variants as natively, and a song's mod is found there by
     the native rules, the remembered variant preference included; a mod the collection has not
@@ -2856,4 +2878,4 @@ the keyboard are the standalone app's. What differs:
   per site.
 - **A crash** shows the page's error box with the message and a Reload button, and logs the
   message and the stack to the browser's console; there is no crash log file.
-- The title of the browser tab is the window's title.
+- The title of the browser tab is `<song> - OpenRB-338` (`<song>* - OpenRB-338` when modified), not the native window's title (task-326).

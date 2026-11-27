@@ -275,6 +275,8 @@ pub struct App {
     /// saves it (the file handle of `showSaveFilePicker`, or a download); Save writes there
     /// again only for that document at that path (task-172).
     #[cfg(target_arch = "wasm32")]
+    pub(crate) web_nav: crate::web::WebNav,
+    #[cfg(target_arch = "wasm32")]
     pub(crate) web_target: Option<(u64, std::path::PathBuf, crate::web::SaveTarget)>,
 }
 
@@ -369,6 +371,8 @@ impl App {
             doc_serial: 0,
             #[cfg(target_arch = "wasm32")]
             web_target: None,
+            #[cfg(target_arch = "wasm32")]
+            web_nav: Default::default(),
         }
     }
 
@@ -1230,9 +1234,12 @@ impl App {
             if shortcuts::consume(ui, &shortcuts::NEW) {
                 self.command(Cmd::New);
             } else if shortcuts::consume(ui, &shortcuts::OPEN_COLLECTION) {
-                // the web's File > Open Collection... (task-324); natively nothing, but the
+                // the web's File > Open from Collection... (task-324); natively nothing, but the
                 // key is taken and is not Open
                 self.command(Cmd::OpenCollection);
+            } else if shortcuts::consume(ui, &shortcuts::OPEN_RANDOM) {
+                // the web's File > Open from Collection (Random) (task-326); natively nothing
+                self.command(Cmd::OpenRandom);
             } else if shortcuts::consume(ui, &shortcuts::OPEN) {
                 self.command(Cmd::Open);
             } else if !self.is_plugin() && shortcuts::consume(ui, &shortcuts::SAVE) {

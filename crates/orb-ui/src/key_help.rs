@@ -295,7 +295,13 @@ pub fn groups(is_mac: bool) -> Vec<Group> {
                 menu_row(
                     is_mac,
                     &shortcuts::OPEN_COLLECTION,
-                    "File > Open Collection...",
+                    "File > Open from Collection...",
+                ),
+                #[cfg(target_arch = "wasm32")]
+                menu_row(
+                    is_mac,
+                    &shortcuts::OPEN_RANDOM,
+                    "File > Open from Collection (Random)",
                 ),
                 menu_row(is_mac, &shortcuts::SAVE, "File > Save"),
                 menu_row(is_mac, &shortcuts::INFO, "File > Info..."),

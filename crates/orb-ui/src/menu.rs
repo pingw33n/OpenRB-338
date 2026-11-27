@@ -57,7 +57,7 @@ use crate::settings::Theme;
 use crate::shortcuts;
 
 /// File > Open...: on the web the browser's file picker (the user's decision of 2026-11-27); the
-/// collection is File > Open Collection... (task-174).
+/// collection is File > Open from Collection... (task-174).
 pub const OPEN_ITEM: &str = "Open...";
 
 /// The height of the menu bar in points.
@@ -109,9 +109,12 @@ pub enum Cmd {
     /// "Choose Mods Folder..." of the web's Mods menu (task-172): the browser's folder picker;
     /// its mods are the Mods folder for the session ([`crate::web`]).
     ChooseModsFolder,
-    /// File > Open Collection... of the web (task-174): the in-app browser on the rb-songs
+    /// File > Open from Collection... of the web (task-174): the in-app browser on the rb-songs
     /// collection. Nothing natively.
     OpenCollection,
+    /// File > Open from Collection (Random) of the web (task-326): a random song of the
+    /// collection that can open.
+    OpenRandom,
     /// Mods > Use Collection of the web (task-174, the user's review of 2026-11-27), a check item
     /// checked while the Mods folder is the rb-mods collection: unchecked, it goes back to the
     /// collection (the picked folder is no longer used); checked, it does what Choose Mods
@@ -740,11 +743,18 @@ impl App {
                 opened.source.glob.mod_ftp = info.ftp;
                 opened.source.glob.mod_www = info.web;
                 opened.engine.mod_name = info.name.clone();
+                #[cfg(target_arch = "wasm32")]
+                let serial = self.doc_serial;
                 self.adopt_as(
                     None,
                     opened,
                     Some((info.name, Kit::Mod(mod_path.to_path_buf()))),
                 );
+                // the page's address names the demo of a collection mod (task-326)
+                #[cfg(target_arch = "wasm32")]
+                if self.doc_serial != serial {
+                    self.web_nav.demo_of = Some(mod_path.to_path_buf());
+                }
             }
             (Err(e), _) | (_, Err(e)) => self.fail(e),
         }
@@ -1361,9 +1371,11 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             Cmd::ChooseModsFolder => crate::web::pick(crate::web::Pick::ModsFolder),
             #[cfg(not(target_arch = "wasm32"))]
-            Cmd::ChooseModsFolder | Cmd::OpenCollection | Cmd::UseCollection => {}
+            Cmd::ChooseModsFolder | Cmd::OpenCollection | Cmd::OpenRandom | Cmd::UseCollection => {}
             #[cfg(target_arch = "wasm32")]
             Cmd::OpenCollection => self.web_open_collection(),
+            #[cfg(target_arch = "wasm32")]
+            Cmd::OpenRandom => self.web_open_random(),
             #[cfg(target_arch = "wasm32")]
             Cmd::UseCollection => {
                 if self.uses_collection() {
@@ -2038,6 +2050,16 @@ impl App {
         )
     }
 
+    /// The web page's title (task-326): the song first, `<song> - OpenRB-338`, or
+    /// `<song>* - OpenRB-338` when modified. The native window's is [`App::title_text`].
+    pub fn page_title_text(&self) -> String {
+        format!(
+            "{}{} - OpenRB-338",
+            self.doc.name(),
+            if self.doc.modified { "*" } else { "" }
+        )
+    }
+
     /// The window's title: the song's name, marked when modified.
     pub fn update_title(&mut self, ctx: &Context) {
         let title = self.title_text();
@@ -2101,9 +2123,22 @@ impl App {
             }
             // the rb-songs collection (task-174)
             if cfg!(target_arch = "wasm32")
-                && item(ui, "Open Collection...", key(&shortcuts::OPEN_COLLECTION))
+                && item(
+                    ui,
+                    "Open from Collection...",
+                    key(&shortcuts::OPEN_COLLECTION),
+                )
             {
                 *cmd = Some(Cmd::OpenCollection);
+            }
+            if cfg!(target_arch = "wasm32")
+                && item(
+                    ui,
+                    "Open from Collection (Random)",
+                    key(&shortcuts::OPEN_RANDOM),
+                )
+            {
+                *cmd = Some(Cmd::OpenRandom);
             }
             if !plugin && item(ui, "Save", key(&shortcuts::SAVE)) {
                 *cmd = Some(Cmd::Save);

@@ -556,18 +556,18 @@ app is in `docs/ui_spec.md` section 26, how it is put together in `docs/web.md` 
   place: `-g` keeps the name section (panic stacks name the functions that survive inlining).
   The Pages workflow runs `scripts/binaryen.sh` in a step of its own, then `build-web.sh`.
 - **What it writes.** `dist/web/` (ignored by git, as all of `dist/`): `index.html` (from
-  `crates/orb-web/index.html`), `favicon.ico` (`assets/app_icon.ico`), `orb_worklet.wasm` (the
+  `crates/orb-web/index.html`), `img/` (the landing page's `favicon.svg`, `favicon-32.png` and `apple-touch-icon.png`), `orb_worklet.wasm` (the
   worklet's module) and `pkg/orb_web.js` + `pkg/orb_web_bg.wasm` (the page's module, through
   `wasm-bindgen --target web`). Every URL in the page is relative, so the folder works from any
   path: GitHub Pages serves the project site under `/OpenRB-338/`, and the deploy (task-175) puts
   the page under `/OpenRB-338/web/`. `--serve [PORT]` serves it under that same sub-path (a
   folder of links in `target/web-serve/`, `python3 -m http.server`, default port 8338).
 - **The collections** (task-174). `--index FILE` copies the collection index into the site as
-  `index.json`, which the page fetches for File > Open Collection... and the mod collection
+  `index.json`, which the page fetches for File > Open from Collection... and the mod collection
   (`docs/web.md` sections 8 and 9). Make it with `orb web-index --songs RB-SONGS/songs --mods
   RB-MODS/mods --songs-commit SHA --mods-commit SHA -o index.json` (both commits pushed: the page
   downloads the files from them). Without `--index` the page has no collections (the Mods menu
-  is empty until a folder is picked, and Open Collection... says the index is not available).
+  is empty until a folder is picked, and Open from Collection... says the index is not available).
 - **The crates.** `crates/orb-web` is the page's module (a cdylib, empty off wasm32): it calls
   `orb_ui::web::start`. orb-ui builds for wasm32 with its feature `app` (eframe with its default
   features: wgpu with WebGPU, falling back to WebGL2); on wasm32 it takes orb-player with the

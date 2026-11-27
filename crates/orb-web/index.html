@@ -6,7 +6,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenRB-338</title>
-<link rel="icon" href="favicon.ico">
+<!-- the landing page's icons (site/index.html), copied by scripts/build-web.sh -->
+<link rel="icon" href="img/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="img/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1b1b; }
   #orb-canvas { display: block; width: 100%; height: 100%; }
@@ -71,10 +74,14 @@ const progress = (text, fraction) => {
 
 // The app's Ctrl/Cmd shortcuts the browser would act on (eframe already keeps O and S, and the
 // copy, cut and paste keys are the browser's clipboard events). Ctrl/Cmd+N, W, T and Q stay
-// the browser's: a page cannot take them (docs/ui_spec.md section 26).
+// the browser's: a page cannot take them (docs/ui_spec.md section 26). Y is taken only with
+// Shift (File > Open from Collection (Random), which Firefox and Edge bind as Ctrl+Shift+Y):
+// a plain Ctrl+Y (redo, history) stays the browser's.
 const KEYS = new Set(["d", "e", "f", "g", "i", "l", "z"]);
 window.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && KEYS.has(e.key.toLowerCase())) {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (KEYS.has(k) || (k === "y" && e.shiftKey)) {
     e.preventDefault();
   }
 }, { capture: true });

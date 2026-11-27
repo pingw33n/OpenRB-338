@@ -4154,7 +4154,7 @@ fn ctrl_i_opens_the_info_window_and_plain_i_stays_a_panel_key() {
 }
 
 /// task-324: a shortcut with Shift is its own key, not its unshifted twin: Cmd+Shift+O is
-/// File > Open Collection... (nothing natively), and does not open the browser as Cmd+O does;
+/// File > Open from Collection... (nothing natively), and does not open the browser as Cmd+O does;
 /// the other shortcuts do not run either with a Shift added.
 #[test]
 fn a_shifted_shortcut_does_not_run_its_unshifted_twin() {
@@ -4224,4 +4224,45 @@ fn a_shifted_shortcut_does_not_run_its_unshifted_twin() {
         assert_eq!(h.app.key_mode, mode, "Cmd+Shift+{k:?} set a mode");
     }
     assert!(!h.app.doc.modified);
+}
+
+/// task-326: Alt is exact like Shift (Cmd+Alt+O is not Cmd+O), Cmd+Shift+Y is the web's
+/// File > Open from Collection (Random) and does nothing natively, and the web's page title
+/// puts the song first while the native window's does not.
+#[test]
+fn alt_is_exact_and_the_page_title_has_the_song_first() {
+    let key = |key, modifiers| Event::Key {
+        key,
+        physical_key: Some(key),
+        pressed: true,
+        repeat: false,
+        modifiers,
+    };
+    let song = root().join("tests/songs/diag/songs/303_saw_lowcut.rbs");
+    let mut h = Harness::with_menu();
+    h.open(&song);
+    h.frame(vec![]);
+    for mods in [
+        Modifiers::COMMAND | Modifiers::ALT,
+        Modifiers::COMMAND | Modifiers::SHIFT,
+    ] {
+        h.frame(vec![Event::ModifiersChanged(mods), key(egui::Key::O, mods)]);
+        assert!(!h.app.browsing(), "{mods:?}+O is not Open");
+        h.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    }
+    let shifted = Modifiers::COMMAND | Modifiers::SHIFT;
+    h.frame(vec![
+        Event::ModifiersChanged(shifted),
+        key(egui::Key::Y, shifted),
+    ]);
+    h.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    assert!(!h.app.browsing(), "Cmd+Shift+Y does nothing natively");
+
+    let name = h.app.doc.name().to_string();
+    h.app.doc.modified = false;
+    assert_eq!(h.app.page_title_text(), format!("{name} - OpenRB-338"));
+    assert_eq!(h.app.title_text(), format!("OpenRB-338 - {name}"));
+    h.app.doc.modified = true;
+    assert_eq!(h.app.page_title_text(), format!("{name}* - OpenRB-338"));
+    assert_eq!(h.app.title_text(), format!("OpenRB-338 - {name} *"));
 }

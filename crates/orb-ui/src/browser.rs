@@ -867,7 +867,7 @@ impl Browser {
 
     fn sidebar_body(&mut self, ui: &mut Ui, settings: &mut Settings) {
         // the web page (task-174, the user's review of 2026-11-27): the in-app browser is File >
-        // Open Collection...'s, so its one place is the song collection; the page has no songs
+        // Open from Collection...'s, so its one place is the song collection; the page has no songs
         // or mods folder to use, no home and no recent folders of the computer
         #[cfg(target_arch = "wasm32")]
         {

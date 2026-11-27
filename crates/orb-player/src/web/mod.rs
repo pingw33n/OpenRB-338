@@ -8,9 +8,9 @@
 //! [`crate::remote::Player`] to it.
 //!
 //! The browser keeps an AudioContext suspended until a user gesture: the output resumes it on
-//! every `pointerdown`, `keydown` and `touchend` of the document while it is not running, and
-//! when the tab is shown again (`visibilitychange`), in case the browser suspended it while the
-//! tab was hidden.
+//! every `pointerdown`, `pointerup`, `mousedown`, `mouseup`, `click`, `keydown`, `keyup` and
+//! `touchend` of the document while it is not running, and when the tab is shown again
+//! (`visibilitychange`), in case the browser suspended it while the tab was hidden.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -78,7 +78,16 @@ pub struct WebOutput {
     resume: Closure<dyn FnMut(web_sys::Event)>,
 }
 
-const GESTURES: [&str; 3] = ["pointerdown", "keydown", "touchend"];
+const GESTURES: [&str; 8] = [
+    "pointerdown",
+    "pointerup",
+    "mousedown",
+    "mouseup",
+    "click",
+    "keydown",
+    "keyup",
+    "touchend",
+];
 
 /// The context at 44.1 kHz (`latencyHint` "interactive"), or at the device's rate when the
 /// browser refuses 44.1 kHz.

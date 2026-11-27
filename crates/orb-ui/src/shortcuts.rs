@@ -7,9 +7,15 @@ use egui::{Context, Key, KeyboardShortcut, ModifierNames, Modifiers, Ui};
 
 pub const NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 pub const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
-/// File > Open Collection... of the web page (task-324); natively it is taken and does nothing.
+/// File > Open from Collection... of the web page (task-324); natively it is taken and does
+/// nothing.
 pub const OPEN_COLLECTION: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::O);
+/// File > Open from Collection (Random) of the web page (task-326); natively it is taken and
+/// does nothing. Not Cmd/Ctrl+Alt+O: Option types a character on macOS and Ctrl+Alt is AltGr on
+/// Windows and Linux layouts (docs/web.md section 9.4).
+pub const OPEN_RANDOM: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Y);
 pub const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 /// File > Info.
 pub const INFO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::I);
@@ -43,16 +49,17 @@ pub fn text(ctx: &Context, sc: &KeyboardShortcut) -> String {
     text_for(sc, ctx.os().is_mac())
 }
 
-/// Takes the shortcut's key press from the input, true if it was pressed. Exact about Shift:
-/// egui's logical matching ignores an extra Shift, so Cmd+Shift+O would also be Cmd+O; here a
-/// shortcut without Shift is not taken while Shift is held (task-324).
+/// Takes the shortcut's key press from the input, true if it was pressed. Exact about Shift
+/// and Alt: egui's logical matching ignores an extra one, so Cmd+Shift+O would also be Cmd+O;
+/// here a shortcut without Shift (Alt) is not taken while Shift (Alt) is held (task-324,
+/// task-326).
 pub fn consume(ui: &Ui, sc: &KeyboardShortcut) -> bool {
     ui.input_mut(|i| consume_in(i, sc))
 }
 
 /// [`consume`] on the input itself.
 pub fn consume_in(i: &mut egui::InputState, sc: &KeyboardShortcut) -> bool {
-    if i.modifiers.shift && !sc.modifiers.shift {
+    if (i.modifiers.shift && !sc.modifiers.shift) || (i.modifiers.alt && !sc.modifiers.alt) {
         return false;
     }
     i.consume_shortcut(sc)
@@ -92,5 +99,41 @@ mod tests {
     fn open_collection_is_shift_open() {
         assert_eq!(text_for(&OPEN_COLLECTION, true), "Shift+Cmd+O");
         assert_eq!(text_for(&OPEN_COLLECTION, false), "Ctrl+Shift+O");
+    }
+
+    #[test]
+    fn open_random_is_shift_y() {
+        assert_eq!(text_for(&OPEN_RANDOM, true), "Shift+Cmd+Y");
+        assert_eq!(text_for(&OPEN_RANDOM, false), "Ctrl+Shift+Y");
+    }
+
+    #[test]
+    fn an_extra_alt_or_shift_is_not_the_plain_shortcut() {
+        let press = |mods: Modifiers| {
+            let mut i = egui::InputState::default();
+            i.modifiers = mods;
+            i.events.push(egui::Event::Key {
+                key: Key::O,
+                physical_key: Some(Key::O),
+                pressed: true,
+                repeat: false,
+                modifiers: mods,
+            });
+            i
+        };
+        assert!(consume_in(&mut press(Modifiers::COMMAND), &OPEN));
+        assert!(!consume_in(
+            &mut press(Modifiers::COMMAND | Modifiers::ALT),
+            &OPEN
+        ));
+        assert!(!consume_in(
+            &mut press(Modifiers::COMMAND | Modifiers::SHIFT),
+            &OPEN
+        ));
+        let alt = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::O);
+        assert!(consume_in(
+            &mut press(Modifiers::COMMAND | Modifiers::ALT),
+            &alt
+        ));
     }
 }

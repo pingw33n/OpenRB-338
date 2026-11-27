@@ -96,6 +96,19 @@ run already, task-172's review); it does the same on `visibilitychange` when the
 the browser suspended the context while the tab was hidden (Chrome does not; mobile browsers
 may). The engine is not reset: playback goes on from where it stopped.
 
+**The startup sound waits for the first gesture** (the user's report of 2026-11-27: in Firefox and
+Safari the mod's startup sound played only after a mouse click). The sound is the engine's,
+queued when the mod opens, so the suspended context plays it at the first resume: before the
+first click or key press there can be no sound, in any browser, and the page adds no overlay.
+`GESTURES` (`crates/orb-player/src/web/mod.rs`) now lists `pointerdown`, `pointerup`, `mousedown`,
+`mouseup`, `click`, `keydown`, `keyup` and `touchend` (it had `pointerdown`, `keydown`, `touchend`),
+all in the capture phase, so whichever event a browser counts as its user activation resumes the
+context (Firefox counts `keydown` except Escape and `mousedown`/`pointerdown` of a mouse, Safari
+`click`, `touchend` and `keydown`; a modifier key alone is no activation in either, and Escape none
+in Firefox). `keydown` was listened to before, so a key press is expected to have started the audio
+already; which of the events each browser accepted could not be checked by an agent (Firefox and
+Safari are the user's).
+
 ## 5. Measured (Chrome 157, macOS, 2026-11-27)
 
 With the test page (`scripts/web-demo.sh --serve`, `http://localhost:8338/`):
@@ -212,7 +225,7 @@ from the desktop app is in `docs/ui_spec.md` section 26.
   in-app browser while the menu item opened the picker. Chromium and Firefox count the keydown
   as the user activation a picker needs; the picker opens in the frame after it, within the
   activation's time (checked: `navigator.userActivation.isActive` was true at the input's
-  click). The collections are File > Open Collection... and Mods > Use Collection (section 9).
+  click). The collections are File > Open from Collection... and Mods > Use Collection (section 9).
 - **The mods folder is read lazily.** A picked mods folder can be large (the user's is 326 mods,
   1 GB). For each `.rbm` at its top the page runs `rbm::Walk`, the walk `Rbm::parse` itself
   runs, over `File.slice`s of the file: the CAT header, every chunk header (an overrun fails),
@@ -462,7 +475,7 @@ natively) and the section "the collections" of `crates/orb-ui/src/web.rs`.
   `/rb-mods/mods` as on any mods folder, without a byte of a mod. The page does not read the
   index's `mod_variants`: the lookup is orb's own over the same names, which `mod_variants`
   equal (section 8.2, task-173's test). A failed index (none deployed, offline) is logged to the
-  console; File > Open Collection... then shows the error and asks for the index again.
+  console; File > Open from Collection... then shows the error and asks for the index again.
 - **The mods source.** At the start `settings.mods_dir` is `/rb-mods/mods` for the session,
   whatever `localStorage` holds; Mods > Choose Mods Folder... replaces it with a picked folder
   (section 7) for the session. Mods > Use Collection is checked while `mods_dir` is
@@ -470,7 +483,7 @@ natively) and the section "the collections" of `crates/orb-ui/src/web.rs`.
   then opens the folder picker (`web::pick(Pick::ModsFolder)`, so a cancel changes nothing),
   and when unchecked it sets `mods_dir` back (`App::web_use_collection`) and reads the Mods
   menu again. The picked folder's files stay in memory (the song may play one of them).
-- **The in-app browser on the web** is reached only by File > Open Collection... (Ctrl/Cmd+Shift+O,
+- **The in-app browser on the web** is reached only by File > Open from Collection... (Ctrl/Cmd+Shift+O,
   task-324; browser check in 9.3); its sidebar
   has the one place "Song collection" (`Browser::sidebar_body` on wasm32), no other places, no
   recent folders and no "Use as ... folder" buttons (the user's review of 2026-11-27).
@@ -513,7 +526,7 @@ Built with `scripts/build-web.sh --index` (rb-songs `6e0b92e`, rb-mods `bfbd8c9`
 bytes), served under `/OpenRB-338/web/` on a local port, the cache and its record cleared
 first:
 
-- The index: 5685 songs, 326 mods. Open Collection... lists `/rb-songs/songs`; typing "orion"
+- The index: 5685 songs, 326 mods. Open from Collection... lists `/rb-songs/songs`; typing "orion"
   selects `orion.rbs`; Enter shows "Downloading orion.rbs", then the mod; the kit is
   `/rb-mods/mods/Orbit2.rbm` (5,064,616 bytes) and Play plays (0 underruns). The record:
   `orion.rbs` 28,092 bytes at tick 1, `Orbit2.rbm` at tick 2.
@@ -537,7 +550,7 @@ first:
   (`CaveyRageRemix.rbm`): unchecked, the Mods menu lists that one mod. Clicked again: checked,
   "Mods from the collection: 317 mods" (326 files, 317 INFO names) and the collection's list.
 - File > **Open...**; Ctrl/Cmd+O clicks the song picker's input.
-- File > Open Collection...: the sidebar shows "Song collection" only.
+- File > Open from Collection...: the sidebar shows "Song collection" only.
 - The user's last changes (2026-11-27, not reviewed in a browser by the user, who approved the
   round-1 build): Use Collection moved before Choose File..., so the web's order is Use
   Collection, Choose File..., Choose Mods Folder...; "Choose file..." is "Choose File..." (Title
@@ -545,7 +558,7 @@ first:
 
 ### 9.3 Ctrl/Cmd+Shift+O (task-324)
 
-File > Open Collection... has the shortcut Cmd+Shift+O (Ctrl+Shift+O elsewhere). egui's
+File > Open from Collection... has the shortcut Cmd+Shift+O (Ctrl+Shift+O elsewhere). egui's
 logical shortcut matching ignores an extra Shift, so Cmd+O (`shortcuts::OPEN`) used to match
 Cmd+Shift+O as well (the user saw the file picker in Firefox); `shortcuts::consume` now refuses
 a shortcut without Shift while Shift is held, and the app checks `OPEN_COLLECTION` first.
@@ -559,3 +572,127 @@ page's `preventDefault` is what must stop it, which a synthetic key cannot show)
 Safari: not checked by an agent. The user then checked the page served from the branch and a
 macOS .app built from it and approved (2026-11-27: "324 is good"); the per-browser detail was
 not reported, so no Firefox or Safari result is recorded here.
+
+## 9.4 Random song, links, title, icons and ?skin= (task-326)
+
+The user's requests of 2026-11-27 for the page. Code: `crates/orb-ui/src/web.rs` (the sections
+"the address bar and the History API" and "the collections"), `collection.rs` (`Song::can_open`,
+`Index::random_song`, `Link`, `with_skin`), `settings.rs` (`Theme::from_query`).
+
+- **Title.** The page's title is `<song> - OpenRB-338`, `<song>* - OpenRB-338` when modified
+  (`App::page_title_text`); the native window's stays `OpenRB-338 - <song>` (`App::title_text`).
+- **Icons.** `index.html` has the landing page's three tags (`site/index.html`): `img/favicon.svg`,
+  `img/favicon-32.png` (32x32) and `img/apple-touch-icon.png`, relative to the page, so any
+  sub-path works. `scripts/build-web.sh` copies the three files from `site/img/` into
+  `dist/web/img/`; `favicon.ico` is gone.
+- **File > Open from Collection (Random)** (`Cmd::OpenRandom`, `App::web_open_random`; the former
+  "Open Collection..." is now "Open from Collection..."). It picks uniformly among the songs
+  `Song::can_open` accepts by what the index says, with no download: no read error, the hash
+  and size present, and the mod resolves: the built-in kit (`mod_name` "Standard ReBirth"), or a
+  non-empty `mod_variants`; with a mods folder of the computer in use (the Mods folder is not
+  `/rb-mods/mods`), by that folder's lookup (`App::resolve_mod_file`, once per mod name). It
+  avoids the song open (unless it is the only one) and then opens it as the browser's choice
+  does (`web_open_song`: the unsaved prompt first, downloads, errors in the dialog).
+  In the 2026-11-27 index 104 of 5830 songs name a mod the collection lacks and are never picked.
+- **The shortcut is Cmd+Shift+Y (Ctrl+Shift+Y elsewhere)**, not the requested Cmd/Ctrl+Option/Alt+O.
+  Reasons: on macOS Option+O types a character (the key is "o with stroke"; eframe
+  falls back to the physical key, `eframe/src/web/events.rs`, so egui would still see O, but a
+  browser or layout may act on the typed character), and Ctrl+Alt is AltGr on Windows and Linux
+  layouts (a Polish AltGr+O types "o acute", a plain character that would open a random song).
+  A shortcut without Alt cannot have either problem. Y: no binding in Chrome or Safari; Firefox
+  (Downloads) and Edge (Collections) bind Ctrl+Shift+Y, and the page asks them to leave it with
+  `preventDefault` (`index.html`, only with Shift held, so a plain Ctrl+Y stays the browser's),
+  as it does Ctrl+Shift+O (a browser's reserved keys,
+  such as Ctrl/Cmd+Shift+R, N, T, W and Q, were avoided). Natively the key is taken and does
+  nothing, as Cmd+Shift+O. `shortcuts::consume` is now exact about Alt too (a shortcut without
+  Alt is not taken while Alt is held), so Cmd+Alt+O is never Cmd+O. The item shows in the menu and
+  in Help > Keyboard Shortcuts on the web only.
+- **Links.** `?song=<path in rb-songs, as the index lists it>` (`songs/Folder/Song.rbs`,
+  percent-encoded, `/` kept) and `?mod=<path in rb-mods>` (`mods/Mod.rbm`), by themselves or
+  together (`collection::Link`; the user's change of 2026-11-27 replaced `?mod-demo=`, which never
+  shipped):
+  - `?song=S` opens the song with the mod it resolves to;
+  - `?song=S&mod=M` opens the song with the mod M of the collection instead (the song opens, M is
+    read, then `use_kit`; the song stays unmodified, as the link chose the mod);
+  - `?mod=M` alone opens the demo song of M, what Mods > Demo Song opens (`App::demo_song`).
+
+  The index's paths, not raw URLs, so a link survives new commits of the collections.
+  - **The address follows the document** (`App::web_nav_frame`, every frame, on the History
+    API): when a collection song or a collection mod's demo becomes the document, the link is
+    **pushed** (`pushState`, state `{n}` = the entry's number), so Back and Forward go between the
+    songs; a local file, a drop, New: the link is removed with `replaceState`, so the bar never
+    names a song that is not open. The link is set when the song is open, not when it is asked
+    for.
+  - **Back and Forward** (`popstate`, `Picked::Popstate`) open the entry's song through the
+    normal path (`web_open_link`: the unsaved prompt first for a song); an entry with no link
+    is File > New; the entry whose song is open already does nothing. When the song does not open
+    (the prompt cancelled, a download failed, a message shown) the browser is sent back to the
+    entry it left with `history.go(delta)` (the numbers `n` give the direction), so the bar stays
+    true. A `?mod=` link (a demo) downloads the mod first and asks the unsaved question after
+    (`Then::Demo`), unlike a song link, which asks first.
+  - **The link follows a mod change.** When the mod of an open collection song changes (a Mods
+    menu choice, a collection mod chosen, a variant), `&mod=<path>` is set with `replaceState`
+    (no history entry), so the link reproduces the song with that mod; when the mod is again the
+    one the song resolves to by itself (the first of the index's `mod_variants`, what a link to
+    the song opens), `&mod=` is removed. A **mod of the computer** (Choose File... from disk, a
+    picked mods folder) has no collection path, so such a link cannot carry it: `mod=` is
+    dropped and the link opens the song with its own mod; likewise for the built-in kit chosen
+    for a song that resolves to a mod. A demo song's link stays `?mod=M` whatever the kit does.
+  - **Loading a link** opens the song once the index is read (`App::web_collection_read`). A
+    path the index does not list, a song or mod it could not read, a mod with no demo song, or
+    an index that failed to load shows a message in the error box, the link is removed and the
+    page is usable.
+- **`?skin=classic` / `?skin=modern`.** The page starts in that skin as if View had chosen it, for
+  that load only: `Settings::set_theme_for_session` sets the theme and its base, so no save
+  writes it; the saved `theme` changes only when the user switches in View. A value that is
+  neither is ignored with a console warning. The address bar always names the skin shown: on
+  load `?skin=` is set (replaceState) to the actual skin, a View switch replaces it (no history
+  entry), and every `?song=` / `?mod=` entry carries it. Parsed by `Theme::from_query`,
+  written by `collection::with_skin` (other parameters, as `?debug-panic`, are kept).
+- **Tests.** `collection.rs` (`random_picks_only_songs_that_can_open_and_not_the_open_one`,
+  `links_parse_and_write`, `the_index_finds_a_song_and_a_mod_by_path`), `settings.rs`
+  (`the_skin_parameter_is_read`), `shortcuts.rs` (`an_extra_alt_or_shift_is_not_the_plain_shortcut`,
+  `open_random_is_shift_y`), `tests/menu.rs` (`alt_is_exact_and_the_page_title_has_the_song_first`).
+
+**Known limitations** (task-326):
+- A Save chosen at the unsaved-changes prompt that then fails does not restore the address bar
+  after a Back or Forward.
+- A `?mod=` link (a mod's demo song) asks the unsaved-changes question after the mod download,
+  not before (`Then::Demo` needs the mod read); a song link asks first.
+- A mod of the computer, and the built-in kit chosen for a song that resolves to a mod, cannot
+  be named by a link (`&mod=` is dropped).
+
+### 9.4.1 Checked (Chrome 157, macOS, 2026-11-27)
+
+A local build with an index of rb-songs and rb-mods (5830 songs, 326 mods), served under
+`/OpenRB-338/web/` on a local port, in an own tab, no dialogs:
+- Title: `Untitled - OpenRB-338`; after loading `?song=songs/BCBG.rbs` `BCBG.rbs - OpenRB-338`;
+  after an edit `meho-ilovetechno2.rbs* - OpenRB-338`.
+- A `?song=` link opened the song with its mod (`/rb-mods/mods/redtop2.rbm`). Cmd+Shift+Y opened a
+  random song (pushed an entry); Back opened the first song again, Forward the second.
+  With the second song modified, Back showed the unsaved prompt; Cancel left the song open and
+  the address back on its link.
+- `?song=songs%2Fnope.rbs&skin=bogus`: the error box "The link names a song that is not in the
+  collection: songs/nope.rbs", the link removed, `?skin=modern` set, the console warning for
+  `bogus`.
+- `?mod-demo=mods%2F030microdot.rbm` (round 0, now `?mod=`) opened its Demo.rbs (kit `030microdot.rbm`, Untitled).
+  View > Classic changed the bar to `skin=classic` with no new entry, and the saved settings then
+  hold `theme`.
+- The icons: the page's tags are the three above (the extension's tab group replaces the favicon
+  with its own marker, so the tab itself could not be compared; the files are served and are the
+  landing page's).
+- Not checked by an agent: Firefox and Safari (the user's, see the task).
+
+### 9.4.2 Round 1: `?mod=` (Chrome 157, macOS, 2026-11-27)
+
+`?mod-demo=` is replaced by `?mod=` (see Links above). Checked on a local build:
+- `?song=songs/BCBG.rbs&mod=mods/030microdot.rbm`: the song opened with `030microdot.rbm`
+  (BCBG resolves to `redtop2.rbm`), unmodified, no history entry added.
+- Mods menu: "707 Mod" set `&mod=mods/Futuregrapher%20707%20Mod.rbm` (replaceState, entry number
+  unchanged); "Standard ReBirth" (a kit with no collection path for a song that resolves to a
+  mod) removed `&mod=`.
+- `?mod=mods/030microdot.rbm` alone opened its Demo.rbs (Untitled, that kit).
+- `?song=songs/BCBG.rbs&mod=mods/nope.rbm`: a mod the index does not list showed "The link names a mod
+  that is not in the collection: mods/nope.rbm" and the link was removed.
+- Not checked: a mod of the computer (the rule above follows from `Link::mod_of_mem_path`, tested
+  natively), Firefox and Safari.
