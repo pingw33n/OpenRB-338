@@ -309,3 +309,102 @@ inputs:
   31 MB in all, 3.5 s (81 s one by one; 4.5 s 32 at a time; 3.5 s 128 at a time), the wasm
   memory unchanged (31 MB); the song `orion.rbs` then read and played its mod `Orbit2.rbm`.
   Before, with the shortcut, the scan took 0.2 s.
+
+## 8. The collection index: `orb web-index` (task-173)
+
+The page cannot list a GitHub repository (60 unauthenticated API requests an hour) or read the
+mods to find one by its INFO name (326 mods, about 1 GB). The deploy runs, once per release,
+
+    orb web-index --songs rb-songs/songs --mods rb-mods/mods \
+        --songs-commit SHA --mods-commit SHA -o index.json
+
+and the page fetches `index.json`, then only the song and the mod it needs, from `raw_base` +
+`path` (raw.githubusercontent.com sends `Access-Control-Allow-Origin: *`; a path is the file's
+name as git stores it, so the page percent-encodes it). The subcommand is a developer tool,
+hidden from `orb --help` (task-137). Code: `crates/orb-cli/src/webindex.rs`; test:
+`crates/orb-cli/tests/web_index.rs`.
+
+**The output is deterministic**: compact JSON on one line, tables sorted by the bytes of the
+path, no timestamp, one trailing newline; the same files and commits give the same bytes. A path
+is relative to the repository root: it starts with the name of the folder given (`songs/...`,
+`mods/...`), `.rbs` and `.rbm` in any letter case, `/` separated, UTF-8 (a name that is not fails
+the run). Songs are found in the folder and all the folders below it; mods in the top level of
+the folder only, as `orb_cli::mods::scan` and the web page read a mod folder (a mod in a
+subfolder is not indexed and never matches). A file that cannot be read does not stop the run:
+it is listed with `size` and `sha256` null and the read error.
+
+### 8.1 Format, version 1
+
+The page downloads the file, so it is compact: each table has its `columns` once and its rows as
+arrays (no key names per entry), folders and mods are numbers, a hash is base64url. Top level:
+
+| Key | Value |
+|---|---|
+| `format` | `"orb-web-index"` |
+| `version` | `1`; a change of a key's meaning, or a removed key or column, raises it; a column added at the end does not |
+| `songs_repo`, `mods_repo` | `{name, commit, raw_base}`: `name` is `"rb-songs"` / `"rb-mods"`, `commit` the `--songs-commit` / `--mods-commit` text or null, `raw_base` `https://raw.githubusercontent.com/pingw33n/<name>/<commit>/` (pinned to the commit, so a later push never mismatches the index) or null without the commit |
+| `mods_dir` | the mods' folder in `rb-mods` (`"mods"`) |
+| `song_dirs` | the songs' folders, sorted, each relative to the repository root (`"songs"`, `"songs/Some/Folder"`) |
+| `song_columns`, `songs` | the columns of a song row, and the rows, sorted by folder path then file name |
+| `mod_columns`, `mods` | the columns of a mod row, and the rows, sorted by file name |
+
+A **song row** has the columns `dir`, `file`, `size`, `sha256`, `error`, `format`, `version`,
+`title`, `mod_name`, `tempo_bpm`, `last_event_bar`, `mod_variants`. The song's path is
+`song_dirs[dir] + "/" + file`.
+- `size` (bytes) and `sha256` (the file's SHA-256, base64url without padding, 43 characters; the
+  alphabet is `A-Z a-z 0-9 - _`).
+- `error`: null for a song orb reads; else why it cannot (the text `orb render` gives, or the
+  read error), and every column after it is null.
+- The facts are those of `orb info --json` (`SongFacts`, so the page and the CLI agree), only the
+  ones the browser shows: `format` (`"rbs"` or `"rb1x"`), `version`, `title`, `mod_name`,
+  `tempo_bpm`, `last_event_bar` (1-based bar of the latest track event, null for a song with no
+  events). The rest of `orb info` (text, web page, copyright, loop, shuffle and so on) is read
+  from the song when it is opened.
+- `mod_variants`: the indexes in `mods` of every mod whose INFO name is `mod_name`, in orb's
+  order; the first is the mod `orb render` loads. The built-in kit is `mod_name` equal to
+  `"Standard ReBirth"` exactly (the song then has no variants); any other song with no variants
+  names a mod that is not in the collection.
+
+A **mod row** has the columns `file`, `size`, `sha256`, `name`, `recrypted`, `error`. The mod's
+path is `mods_dir + "/" + file`.
+- `size`, `sha256`: as for a song.
+- `name`: its INFO menu name, null when the file does not parse or has no INFO, which is when
+  `Rbm::parse` and `info()` give none, `orb_cli::mods::scan`'s rule and the web page's.
+- `recrypted`: 1 when the embedded key bytes cover every sample slot (the test of orb-ui's
+  `ModStatus`, docs/rbm.md 12.4), else 0 (an unrecrypted mod, a file that does not parse).
+- `error`: null, or why the file does not parse or cannot be read.
+
+### 8.2 The mod lookup rule
+
+Unchanged from task-145, task-150 and task-151: a song's mod is found by its INFO name only,
+compared ignoring ASCII case (`mods::names_match`), never by file name. The mods that match are
+`mod_variants`, in the byte order of their file names (`mods::byte_order`, `AXIOM.rbm` before
+`axiom(b3).rbm`), and the first is the default. A mod that is not recrypted takes part like any
+other: it is found, and fails when its samples are loaded; the page marks it with `recrypted`.
+`tests/web_index.rs` compares `mod_variants` with `mods::scan` and `mods::find_in_dir` over the
+fixture's mod folder.
+
+### 8.3 Measured (2026-11-27, macOS, release build)
+
+On `~/rb-songs/songs` (commit `6e0b92e`) and `~/rb-mods/mods` (commit `bfbd8c9`): 5685 songs in
+249 folders, 326 mods, 4.4 to 5.3 s (one thread; the cost is reading and hashing 1.2 GB and
+parsing 326 mods and 5685 songs). 0 unreadable songs, 0 unrecrypted mods, every mod has a name;
+2526 songs use the built-in kit, 3055 resolve to a mod file (33 of them to one of several
+variants) and 104 name a mod that is not in rb-mods.
+
+The size of the file, which the page downloads (GitHub Pages serves gzip):
+
+| Format | Raw | gzip -9 | brotli |
+|---|---|---|---|
+| first version: objects per entry, hex hashes, every `orb info --json` fact, paths in full | 4,754,036 | 936,065 | 656,626 |
+| this format (compact JSON, base64url) | 910,189 | 400,938 | 351,897 |
+| this format with hex hashes | 1,042,739 | 440,065 | 353,460 |
+| the same tables as tab-separated text | 782,256 | 392,874 | 348,292 |
+
+Where the first version's bytes went (gzip, 5685 songs): the song text 278 KB, the hashes 217 KB,
+the paths 61 KB, the title 42 KB, the web page 25 KB. The text and the other facts the browser
+does not list are gone (the page gets them from the song it opens), and the hashes are the floor:
+32 random bytes a file, 5685 + 326 files, about 190 KB however they are written. Tab-separated
+text saves 2 % over the compact JSON and needs its own escaping and a hand parser (a title may
+hold tabs or newlines, a list of mods has no cell), so the index stays JSON, which the page
+already parses with serde.

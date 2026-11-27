@@ -164,6 +164,44 @@ enum Cmd {
         #[arg(long)]
         standard_kit: bool,
     },
+    /// Write the index of the rb-songs and rb-mods collections that the web version fetches
+    /// instead of listing the repositories: per song its folder, file name, size, SHA-256, a
+    /// few facts of `orb info --json` and the mods its mod name matches; per mod its file name,
+    /// size, SHA-256, INFO name and whether it is recrypted. Compact JSON, sorted, no
+    /// timestamps: the same files and commits give the same bytes. Paths are relative to each
+    /// repository's root (they start with the folder's own name, `songs/` or `mods/`), so
+    /// `raw_base` + path is the URL.
+    ///
+    /// Top-level keys: format ("orb-web-index"), version (1), songs_repo and mods_repo
+    /// (name, commit, raw_base; null without --songs-commit / --mods-commit), mods_dir,
+    /// song_dirs, song_columns, songs, mod_columns, mods. A table's rows are arrays in the order
+    /// of its columns: songs dir (index in song_dirs), file, size, sha256 (base64url), error
+    /// (null, or why orb cannot read the song, and then the rest is null), format, version,
+    /// title, mod_name, tempo_bpm, last_event_bar and mod_variants (indexes in mods of every mod
+    /// whose INFO name matches, ignoring ASCII case, in orb's order: the bytes of the file
+    /// name); mods file, size, sha256, name (INFO name, null when it has none or is no mod),
+    /// recrypted (0 or 1) and error. Mods are read in the top level of the folder only, as orb
+    /// does; songs in all folders below. docs/web.md section 8.
+    // a developer tool (task-137): not in `orb --help`, still works
+    #[command(hide = true)]
+    WebIndex {
+        /// The folder of the songs (the `songs` folder of rb-songs), searched for .rbs files.
+        #[arg(long, value_name = "DIR")]
+        songs: PathBuf,
+        /// The folder of the recrypted mods (the `mods` folder of rb-mods), searched for .rbm
+        /// files.
+        #[arg(long, value_name = "DIR")]
+        mods: PathBuf,
+        /// The commit of rb-songs the files are at (pins raw_base).
+        #[arg(long, value_name = "SHA")]
+        songs_commit: Option<String>,
+        /// The commit of rb-mods the files are at (pins raw_base).
+        #[arg(long, value_name = "SHA")]
+        mods_commit: Option<String>,
+        /// The index to write.
+        #[arg(short, long, value_name = "FILE")]
+        output: PathBuf,
+    },
     /// Work with .rbm mods: recrypt, unpack, pack and pack-standard.
     #[command(name = "mod", subcommand)]
     Mod(ModCmd),
@@ -345,6 +383,22 @@ fn main() -> ExitCode {
             } else {
                 Err(Fail(1, "some songs differ from their references".into()))
             }
+        }),
+        Cmd::WebIndex {
+            songs,
+            mods,
+            songs_commit,
+            mods_commit,
+            output,
+        } => orb_cli::webindex::build(&orb_cli::webindex::Options {
+            songs: &songs,
+            mods: &mods,
+            songs_commit: songs_commit.as_deref(),
+            mods_commit: mods_commit.as_deref(),
+        })
+        .and_then(|out| {
+            std::fs::write(&output, out)
+                .map_err(|e| fail(1, format!("{}: cannot write: {e}", output.display())))
         }),
         Cmd::Mod(ModCmd::Recrypt {
             inputs,
