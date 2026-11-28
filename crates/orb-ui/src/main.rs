@@ -39,12 +39,14 @@
 // build keeps the console, for `dbg!` and panics.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use eframe::egui;
 use eframe::egui_wgpu::wgpu::Backends;
 use eframe::egui_wgpu::{WgpuError, WgpuSetup, WgpuSetupCreateNew};
+use eframe::{Renderer, egui};
 use orb_engine::tables::Tables;
 use orb_ui::app::{App, Shot};
 use orb_ui::browser::Mode;
@@ -294,34 +296,16 @@ fn main() -> eframe::Result {
         link = Some(l);
     }
 
-    // The window starts maximized; an explicit --size opens at that size instead.
-    let viewport = egui::ViewportBuilder::default()
-        .with_title("OpenRB-338")
-        .with_app_id("OpenRB-338")
-        .with_icon(Arc::new(orb_ui::art::app_icon(256)))
-        // the menu bar is above the panel
-        .with_inner_size([size[0], size[1] + MENU_H])
-        // The minimum holds every window the user cannot resize (task-297; was half the panel,
-        // decision task-040).
-        .with_min_inner_size([MIN_WINDOW_W, MIN_WINDOW_H])
-        .with_maximized(!sized);
-    let mut options = eframe::NativeOptions {
-        viewport,
-        ..Default::default()
-    };
-    options.wgpu_options.wgpu_setup = wgpu_setup();
-    let result = eframe::run_native(
-        "OpenRB-338",
-        options,
-        Box::new(move |cc| {
+    // The app is made by the first window that opens. It sits in a cell the attempts share: a
+    // renderer that fails before eframe calls it leaves it there for the next one (task-328).
+    let make_app: Rc<RefCell<Option<eframe::AppCreator<'static>>>> =
+        Rc::new(RefCell::new(Some(Box::new(move |cc| {
             // always dark, whatever the system theme (task-127; `App::show` keeps it)
             cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
-            // ORB_GPU_INFO=1 prints the adapter wgpu chose (scripts/appimage-smoke.sh)
-            if std::env::var_os("ORB_GPU_INFO").is_some_and(|v| v == "1")
-                && let Some(rs) = &cc.wgpu_render_state
-            {
-                let i = rs.adapter.get_info();
-                eprintln!("gpu: {:?} {:?} {}", i.backend, i.device_type, i.name);
+            // ORB_GPU_INFO=1 prints the renderer and the adapter it uses
+            // (scripts/appimage-smoke.sh)
+            if std::env::var_os("ORB_GPU_INFO").is_some_and(|v| v == "1") {
+                print_gpu_info(cc);
             }
             if let Some(ppp) = ppp {
                 cc.egui_ctx.set_pixels_per_point(ppp);
@@ -377,33 +361,169 @@ fn main() -> eframe::Result {
             if play {
                 app.panel.press("transport.play", 0.0);
             }
-            Ok(Box::new(app))
-        }),
-    );
-    if let Err(e) = &result {
-        report_start_error(e);
-        // the report is the one message; returning the error would print it a second time
-        orb_ui::crash::end_process(1);
+            Ok(Box::new(app) as Box<dyn eframe::App>)
+        }))));
+
+    let renderers = renderers(std::env::var("ORB_RENDERER").ok().as_deref()).unwrap_or_else(|w| {
+        eprintln!("OpenRB-338: {w}");
+        DEFAULT_RENDERERS.to_vec()
+    });
+    let mut failed: Vec<(Renderer, eframe::Error)> = Vec::new();
+    for (n, &renderer) in renderers.iter().enumerate() {
+        let cell = Rc::clone(&make_app);
+        let result = eframe::run_native(
+            "OpenRB-338",
+            native_options(renderer, size, sized),
+            Box::new(move |cc| {
+                let make = cell.borrow_mut().take().expect("the app is made once");
+                make(cc)
+            }),
+        );
+        match result {
+            Ok(()) => {
+                // The window is closed, the settings are saved and the player has stopped: App
+                // and its Controller (the stream) were dropped inside run_native. When an ASIO
+                // driver was loaded the process ends without the DLLs' detach calls (task-193).
+                orb_ui::crash::terminate_if_asio_was_used(0);
+                return Ok(());
+            }
+            Err(e) => {
+                let next = renderers.get(n + 1).copied();
+                let retry = next.is_some() && retries(&e, make_app.borrow().is_none());
+                if let (true, Some(next)) = (retry, next) {
+                    eprintln!(
+                        "OpenRB-338: the {} renderer could not open the window ({e}); trying {}",
+                        renderer_name(renderer),
+                        renderer_name(next)
+                    );
+                }
+                failed.push((renderer, e));
+                if !retry {
+                    break;
+                }
+            }
+        }
     }
-    // The window is closed, the settings are saved and the player has stopped: App and its
-    // Controller (the stream) were dropped inside run_native. When an ASIO driver was loaded
-    // the process ends without the DLLs' detach calls (task-193).
-    orb_ui::crash::terminate_if_asio_was_used(0);
-    result
+    report_start_error(&failed);
+    // the report is the one message; returning the error would print it a second time
+    orb_ui::crash::end_process(1)
 }
 
-/// What the user is told when the window cannot be made: eframe's error, and for a wgpu
-/// error (no adapter for the backends asked for) how to pick another backend.
-fn start_error_text(e: &eframe::Error) -> String {
-    let mut text = format!("OpenRB-338 could not open its window: {e}");
-    if matches!(
+/// The renderers tried in turn when `ORB_RENDERER` is not set: wgpu (Metal, DX12, Vulkan or
+/// GL), then OpenGL through glow when wgpu cannot start (task-328; macOS 11 on an old Mac:
+/// "Parent device is lost"). On every desktop system: glow is a fallback only.
+const DEFAULT_RENDERERS: [Renderer; 2] = [Renderer::Wgpu, Renderer::Glow];
+
+/// The renderers to try, from `ORB_RENDERER`: unset or empty the default order, `wgpu` or
+/// `glow` (any case) that one alone. Anything else is the warning to print (and the default
+/// is used).
+fn renderers(var: Option<&str>) -> Result<Vec<Renderer>, String> {
+    match var.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        None | Some("") => Ok(DEFAULT_RENDERERS.to_vec()),
+        Some("wgpu") => Ok(vec![Renderer::Wgpu]),
+        Some("glow" | "gl" | "opengl") => Ok(vec![Renderer::Glow]),
+        Some(_) => Err(format!(
+            "ORB_RENDERER={} is not wgpu or glow; trying wgpu, then glow",
+            var.unwrap_or_default()
+        )),
+    }
+}
+
+/// Whether a failed start tries the next renderer: a wgpu error (no adapter, no surface, the
+/// device lost, ...) before the app was made. Once the app was made the window ran, and its
+/// state (the player, the song) is gone with it; other errors (winit, the app's own) are not
+/// the renderer's.
+fn retries(e: &eframe::Error, app_made: bool) -> bool {
+    !app_made && matches!(e, eframe::Error::Wgpu(_))
+}
+
+fn renderer_name(r: Renderer) -> &'static str {
+    match r {
+        Renderer::Wgpu => "wgpu",
+        Renderer::Glow => "OpenGL (glow)",
+    }
+}
+
+/// The window's options for a renderer. The window starts maximized; an explicit --size opens
+/// at that size instead.
+fn native_options(renderer: Renderer, size: [f32; 2], sized: bool) -> eframe::NativeOptions {
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("OpenRB-338")
+        .with_app_id("OpenRB-338")
+        .with_icon(Arc::new(orb_ui::art::app_icon(256)))
+        // the menu bar is above the panel
+        .with_inner_size([size[0], size[1] + MENU_H])
+        // The minimum holds every window the user cannot resize (task-297; was half the panel,
+        // decision task-040).
+        .with_min_inner_size([MIN_WINDOW_W, MIN_WINDOW_H])
+        .with_maximized(!sized);
+    let mut options = eframe::NativeOptions {
+        viewport,
+        renderer,
+        ..Default::default()
+    };
+    options.wgpu_options.wgpu_setup = wgpu_setup();
+    options
+}
+
+/// `ORB_GPU_INFO=1`: the renderer, then wgpu's adapter (`gpu: BACKEND TYPE NAME`, which
+/// scripts/appimage-smoke.sh reads) or OpenGL's strings (`gl: VENDOR, RENDERER, VERSION`).
+fn print_gpu_info(cc: &eframe::CreationContext) {
+    if let Some(rs) = &cc.wgpu_render_state {
+        eprintln!("renderer: wgpu");
+        let i = rs.adapter.get_info();
+        eprintln!("gpu: {:?} {:?} {}", i.backend, i.device_type, i.name);
+    } else if let Some(gl) = &cc.gl {
+        use eframe::glow::HasContext as _;
+        eprintln!("renderer: glow");
+        // SAFETY: the context is current on this thread while eframe makes the app, and the
+        // three names are valid glGetString parameters.
+        let [vendor, name, version] = [
+            eframe::glow::VENDOR,
+            eframe::glow::RENDERER,
+            eframe::glow::VERSION,
+        ]
+        .map(|p| unsafe { gl.get_parameter_string(p) });
+        eprintln!("gl: {vendor}, {name}, {version}");
+    }
+}
+
+/// The WGPU_BACKEND hint for a wgpu error that found no adapter or surface for the backends
+/// asked for.
+fn backend_hint(e: &eframe::Error) -> Option<&'static str> {
+    matches!(
         e,
         eframe::Error::Wgpu(WgpuError::RequestAdapterError(_) | WgpuError::CreateSurfaceError(_))
-    ) {
+    )
+    .then_some(concat!(
+        "No graphics adapter was found for the backends tried. The WGPU_BACKEND ",
+        "environment variable picks the graphics backend: vulkan, gl or dx12 (Windows ",
+        "uses dx12 by default)."
+    ))
+}
+
+/// What the user is told when the window cannot be made: eframe's error of each renderer
+/// tried, and for a wgpu error that found no adapter how to pick another backend.
+fn start_error_text(failed: &[(Renderer, eframe::Error)]) -> String {
+    let mut text = String::from("OpenRB-338 could not open its window");
+    match failed {
+        [] => text.push('.'),
+        [(_, e)] => text.push_str(&format!(": {e}")),
+        _ => {
+            text.push('.');
+            for (r, e) in failed {
+                text.push_str(&format!("\n\nWith {}: {e}", renderer_name(*r)));
+            }
+        }
+    }
+    for hint in failed.iter().filter_map(|(_, e)| backend_hint(e)) {
+        text.push_str("\n\n");
+        text.push_str(hint);
+    }
+    if failed.len() > 1 {
         text.push_str(concat!(
-            "\n\nNo graphics adapter was found for the backends tried. The WGPU_BACKEND ",
-            "environment variable picks the graphics backend: vulkan, gl or dx12 (Windows ",
-            "uses dx12 by default)."
+            "\n\nThe ORB_RENDERER environment variable (wgpu or glow) tries one renderer ",
+            "only."
         ));
     }
     text
@@ -411,8 +531,8 @@ fn start_error_text(e: &eframe::Error) -> String {
 
 /// Prints `start_error_text` and shows it in a box (a release build on Windows has no console;
 /// `ORB_UI_NO_CRASH_DIALOG` turns the box off).
-fn report_start_error(e: &eframe::Error) {
-    let text = start_error_text(e);
+fn report_start_error(failed: &[(Renderer, eframe::Error)]) {
+    let text = start_error_text(failed);
     eprintln!("{text}");
     if !orb_ui::crash::no_dialog() {
         let _ = rfd::MessageDialog::new()
@@ -447,13 +567,8 @@ fn wgpu_setup() -> WgpuSetup {
 mod tests {
     use super::*;
 
-    #[test]
-    fn only_a_no_adapter_error_names_wgpu_backend() {
-        let e = eframe::Error::Wgpu(WgpuError::CustomNativeAdapterSelectionError("x".into()));
-        let t = start_error_text(&e);
-        assert!(t.contains("could not open its window"), "{t}");
-        assert!(!t.contains("WGPU_BACKEND"), "{t}");
-        let e = eframe::Error::Wgpu(WgpuError::RequestAdapterError(
+    fn no_adapter() -> eframe::Error {
+        eframe::Error::Wgpu(WgpuError::RequestAdapterError(
             eframe::wgpu::RequestAdapterError::NotFound {
                 active_backends: Backends::DX12,
                 requested_backends: Backends::DX12,
@@ -462,8 +577,78 @@ mod tests {
                 no_adapter_backends: Backends::DX12,
                 incompatible_surface_backends: Backends::empty(),
             },
-        ));
-        assert!(start_error_text(&e).contains("WGPU_BACKEND"));
+        ))
+    }
+
+    /// The error of the Big Sur report (task-328): "WGPU error: Parent device is lost".
+    fn device_lost() -> eframe::Error {
+        use eframe::wgpu::wgc;
+        let e = wgc::instance::RequestDeviceError::Device(wgc::device::DeviceError::Lost);
+        eframe::Error::Wgpu(WgpuError::RequestDeviceError(e.into()))
+    }
+
+    #[test]
+    fn the_device_lost_text_is_the_reported_one() {
+        assert_eq!(
+            device_lost().to_string(),
+            "WGPU error: Parent device is lost"
+        );
+    }
+
+    #[test]
+    fn only_a_no_adapter_error_names_wgpu_backend() {
+        let e = eframe::Error::Wgpu(WgpuError::CustomNativeAdapterSelectionError("x".into()));
+        let t = start_error_text(&[(Renderer::Wgpu, e)]);
+        assert!(t.contains("could not open its window: "), "{t}");
+        assert!(!t.contains("WGPU_BACKEND"), "{t}");
+        assert!(!t.contains("ORB_RENDERER"), "{t}");
+        assert!(start_error_text(&[(Renderer::Wgpu, no_adapter())]).contains("WGPU_BACKEND"));
+    }
+
+    #[test]
+    fn a_wgpu_error_before_the_app_retries_with_glow() {
+        assert!(retries(&no_adapter(), false));
+        assert!(retries(&device_lost(), false));
+        let custom = eframe::Error::Wgpu(WgpuError::CustomNativeAdapterSelectionError("x".into()));
+        assert!(retries(&custom, false));
+        // once the app was made its window ran: no second window
+        assert!(!retries(&device_lost(), true));
+        // not the renderer's
+        assert!(!retries(&eframe::Error::AppCreation("x".into()), false));
+    }
+
+    #[test]
+    fn both_errors_are_in_the_text_when_both_fail() {
+        let glow = eframe::Error::NoGlutinConfigs(Default::default(), "no OpenGL".into());
+        let t = start_error_text(&[(Renderer::Wgpu, device_lost()), (Renderer::Glow, glow)]);
+        assert!(
+            t.starts_with("OpenRB-338 could not open its window.\n\nWith wgpu: "),
+            "{t}"
+        );
+        assert!(t.contains(&device_lost().to_string()), "{t}");
+        assert!(t.contains("\n\nWith OpenGL (glow): "), "{t}");
+        assert!(t.contains("no OpenGL"), "{t}");
+        assert!(t.contains("ORB_RENDERER"), "{t}");
+        assert!(!t.contains("WGPU_BACKEND"), "{t}");
+        // no adapter: the backend hint once
+        let glow = eframe::Error::NoGlutinConfigs(Default::default(), "none".into());
+        let t = start_error_text(&[(Renderer::Wgpu, no_adapter()), (Renderer::Glow, glow)]);
+        assert_eq!(t.matches("WGPU_BACKEND").count(), 1, "{t}");
+    }
+
+    #[test]
+    fn orb_renderer_picks_one_or_the_default_order() {
+        let both = vec![Renderer::Wgpu, Renderer::Glow];
+        assert_eq!(renderers(None), Ok(both.clone()));
+        assert_eq!(renderers(Some("")), Ok(both));
+        assert_eq!(renderers(Some("wgpu")), Ok(vec![Renderer::Wgpu]));
+        assert_eq!(renderers(Some("GLOW")), Ok(vec![Renderer::Glow]));
+        assert_eq!(renderers(Some(" gl ")), Ok(vec![Renderer::Glow]));
+        assert!(
+            renderers(Some("metal"))
+                .unwrap_err()
+                .contains("ORB_RENDERER=metal")
+        );
     }
 
     #[test]

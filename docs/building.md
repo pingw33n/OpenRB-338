@@ -252,7 +252,8 @@ and `OPENRB_` names are not read any more and have no deprecated alias.
 | `ORB_UI_LOG_DIR` | OpenRB-338 (`crates/orb-ui/src/crash.rs`, task-157) | the folder of the crash logs instead of the platform's (below); tests set it | none |
 | `ORB_UI_NO_CRASH_DIALOG` | OpenRB-338 | any non-empty value except `0` turns off the native box after a panic (the log and stderr stay); tests set `1` | none |
 | `ORB_LOGO_T` | OpenRB-338 | seconds: freezes the logo's startup animation at that time (pictures; task-114, `crates/orb-ui/src/logo_anim.rs`) | none |
-| `ORB_GPU_INFO` | OpenRB-338 | `1` prints the graphics adapter wgpu chose (`scripts/appimage-smoke.sh`) | `OPENRB_GPU_INFO` |
+| `ORB_GPU_INFO` | OpenRB-338 | `1` prints the renderer (`renderer: wgpu` or `renderer: glow`), then the graphics adapter wgpu chose (`gpu: BACKEND TYPE NAME`, read by `scripts/appimage-smoke.sh`) or OpenGL's vendor, renderer and version (`gl: ...`); "The window's renderer" below | `OPENRB_GPU_INFO` |
+| `ORB_RENDERER` | OpenRB-338 (`renderers` in `crates/orb-ui/src/main.rs`, task-328) | `wgpu` or `glow` (also `gl`, `opengl`; any case): only that renderer is tried; unset or empty: wgpu, then OpenGL (glow) when wgpu cannot start; anything else prints a warning and uses the default ("The window's renderer" below) | none |
 | `ORB_UI_FRAME_STATS` | OpenRB-338 (`FrameStats`, `crates/orb-ui/src/app.rs`, task-153) | `1` prints, every 2 s of frames, the frames drawn per second and eframe's mean CPU time of a frame | none |
 | `ORB_UI_START_STATS` | OpenRB-338 (`start_stats`, `crates/orb-ui/src/app.rs`, task-179) | `1` prints the ms from the process's start to the first complete frame, and to every end of a background rasterizing at full resolution | none |
 | `ORB_PLUGIN_SIZE_LOG` | the plugin (`editor::size_log`, `crates/orb-plugin/src/editor.rs`, task-234) | a file to which the editor appends the host's size calls (`adjust_size`/`checkSizeConstraint`, `set_size`/`onSize`, `size`/`getSize`, `resize_hint`/`canResize`, `set_parent`), egui's `resized` and the size requests, with ms; unset: no log (docs/plugin.md section 10) | none |
@@ -386,6 +387,62 @@ folder's `OpenRB-338\clips` and `mods` (drag-out clips and a mod's unpacked copy
 the drag's temporary file; they stay there in portable mode too, as temporary files that need a
 writable place whatever the folder is.
 
+## The window's renderer (task-328)
+
+The standalone app draws its window with eframe's wgpu renderer (egui-wgpu: Metal on macOS,
+DX12 on Windows, Vulkan or OpenGL through EGL on Linux; the backends above). When wgpu cannot
+start, it opens the window again with eframe's OpenGL renderer, glow (egui_glow; glutin makes
+the context: CGL on macOS, WGL on Windows, GLX or EGL on Linux). Why: a MacBook Air on macOS 11
+Big Sur (the oldest macOS supported; the model is likely a 2013 or 2014 Air with Intel HD
+Graphics 5000, a guess) showed only "OpenRB-338 could not open its window: WGPU error: Parent
+device is lost" with v2026.1126. That text is wgpu-core's `DeviceError::Lost`, which wgpu-core
+also gives for an unexpected Metal error while the device is created (`DeviceError::from_hal`);
+wgpu has no GL backend on macOS without ANGLE, so `WGPU_BACKEND` could not help there.
+
+- **Order.** wgpu first on every desktop system, then glow: wgpu stays the renderer wherever it
+  works (Windows and Linux too), glow is only the fallback. `main.rs` `DEFAULT_RENDERERS`.
+- **Which errors retry.** Any `eframe::Error::Wgpu` (no adapter, no surface, the device lost,
+  ...) before eframe made the app (`retries`): eframe calls the app creator after the painter
+  is up, so the app (the player, the song) still waits in a cell the attempts share. An error
+  after the app was made (the window ran) or any other error (winit, the app's own) does not
+  retry. eframe keeps its winit event loop in a thread local (`run_and_return`, the default),
+  so the second `run_native` in the same process works; the failed window is dropped with the
+  error. The retry prints `OpenRB-338: the wgpu renderer could not open the window (ERROR);
+  trying OpenGL (glow)` on stderr.
+- **When both fail**, one box (and stderr) says "OpenRB-338 could not open its window." with
+  each renderer's error ("With wgpu: ...", "With OpenGL (glow): ..."), the `WGPU_BACKEND`
+  hint when wgpu found no adapter or surface, and a line on `ORB_RENDERER`.
+- **`ORB_RENDERER=wgpu` or `glow`** tries that renderer only (testing and support; the box then
+  has its one error, as before). `ORB_GPU_INFO=1` prints `renderer: wgpu` or `renderer: glow`
+  and the adapter (`gpu: ...`) or OpenGL's strings (`gl: Apple, Apple M1 Pro, 4.1 Metal -
+  89.4` on this Mac).
+- **Making wgpu fail on purpose** (to run the fallback on a machine where wgpu works): a
+  backend the machine lacks, e.g. `WGPU_BACKEND=vulkan` on macOS (wgpu: "Failed to create
+  surface for any enabled backend"), `WGPU_BACKEND=metal` on Windows or Linux.
+- **OpenGL on macOS** is a 4.1 or 3.2 core profile: glutin's CGL config asks for
+  `NSOpenGLProfileVersion4_1Core`, then 3.2 core, then legacy; egui_glow reads the GLSL version
+  and uses `#version 140` for GLSL 1.40 and newer, which a core profile accepts. Apple silicon
+  runs the same CGL path (OpenGL over Metal).
+- **Only the standalone app.** The `glow` feature is on in `crates/orb-ui/Cargo.toml`'s
+  non-wasm32 dependencies: the web page keeps wgpu alone, and the plugin takes `orb-ui` without
+  `app` and links no eframe (its editor is egui-baseview with wgpu, docs/plugin.md).
+
+Checked on this Mac (M1 Pro, macOS 15, 2026-11-28; release build, `--demo --size 624x510
+--ppp 2 --screenshot`, `ORB_LOGO_T=10`): with nothing forced wgpu draws; with
+`WGPU_BACKEND=vulkan` the window opens under glow; with `ORB_RENDERER=wgpu
+WGPU_BACKEND=vulkan` the box comes. The screenshots (1248x1064) under glow against wgpu: the
+modern skin differs in 60,006 of 1,327,872 pixels by at most 2 of 255 (antialiased edges of the
+parts: blending rounds differently), the classic skin in 497 pixels by at most 1; two wgpu runs
+are identical. Text, the menu bar and HiDPI (ppp 2) look the same. The window icon is set in
+the viewport (winit), not by the renderer; macOS shows the bundle's icon in the Dock either way.
+
+| Measure (this Mac) | wgpu | glow |
+|---|---|---|
+| first complete frame, modern skin, 3 runs (`ORB_UI_START_STATS`) | 315, 238, 224 ms | 456, 231, 255 ms (forced); 282, 276, 261 ms (fallback, after the failed wgpu attempt) |
+| first complete frame, classic skin, 3 runs | 126, 124, 113 ms | 138, 150, 141 ms (forced); 174, 147, 139 ms (fallback) |
+| CPU per frame playing `Calm.rbs`, modern (`ORB_UI_FRAME_STATS`, 29.2 frames/s) | 1.08 to 1.19 ms | 1.37 to 1.45 ms |
+| CPU per frame playing, classic | 0.76 to 0.85 ms | 0.71 to 0.79 ms |
+
 ## Developer options hidden from the help (task-137)
 
 The end user sees `orb --help` and `OpenRB-338 --help` without the options meant for development,
@@ -407,6 +464,7 @@ work as ever.
 | | `--play` | presses Play once the song is open (CPU measurements of the playing panel, task-153) |
 | | `ORB_LOGO_T=SECONDS` (variable) | freezes the logo's startup animation (task-114) at that time, on the panel and in About, for pictures of a moment |
 | | `ORB_UI_FRAME_STATS=1` (variable) | prints the frame rate and the CPU time per frame every 2 s (task-153) |
+| | `ORB_RENDERER=wgpu\|glow` (variable) | tries that renderer only (task-328, "The window's renderer") |
 | | `ORB_UI_START_STATS=1` (variable) | prints when the first complete frame was drawn and when the parts reached their full resolution, in ms since the start (task-179) |
 
 `OpenRB-338 --help` (also `-h`) prints `usage: OpenRB-338 [SONG]` and exits 0; a bad option or
@@ -1108,13 +1166,15 @@ or `libdl`, and its container does not install the three libraries (it fails whe
   `libvulkan1` and an ICD (Mesa: `mesa-vulkan-drivers`, which has lavapipe, software
   rendering). OpenGL needs **`libegl1`** (`libEGL.so.1`, which wgpu loads at run time) and a
   Mesa or vendor EGL driver (`libegl-mesa0`, `libgl1-mesa-dri`; a desktop has them). Without
-  `libEGL.so.1` and without a Vulkan ICD the program stops with
-  "FailedToCreateSurfaceForAnyBackend"; that was the error of the first task-112 smoke run,
+  `libEGL.so.1` and without a Vulkan ICD wgpu fails with
+  "FailedToCreateSurfaceForAnyBackend" (since task-328 the app then tries OpenGL through glutin,
+  GLX or EGL, and stops only when that fails too: "The window's renderer" below); that was the error of the first task-112 smoke run,
   whose OpenGL run only lacked `libegl1` (task-135: the fallback needed no wgpu setting).
   **Windows (task-177)** asks for DX12 only when `WGPU_BACKEND` is unset (`main.rs`
   `wgpu_backends`; macOS and Linux keep egui-wgpu's `PRIMARY | GL`), and there is no fallback
   probe: `WGPU_BACKEND=vulkan` or `gl` overrides it, and a machine with no DX12 adapter stops
-  with a box (and a stderr line) that names `WGPU_BACKEND`. Why: with the default, wgpu loaded
+  with a box (and a stderr line) that names `WGPU_BACKEND` (since task-328 only after OpenGL
+  failed too: "The window's renderer" below). Why: with the default, wgpu loaded
   and enumerated every Vulkan driver, and Intel's (`igvk64.dll` 31.0.101.2140) crashes there
   with an access violation, so v2026.1103.0917 exited silently before the window appeared
   (GitHub issue #10; the same crash is reported for another egui/wgpu app, storytold/wordcraft

@@ -52,6 +52,10 @@ serde_json = "1"
 sha2 = "0.10"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The standalone window's second renderer: OpenGL through glutin, tried when wgpu cannot start
+# (task-328: macOS 11 on an old Mac, "Parent device is lost"). Not on wasm32: the web page
+# keeps wgpu alone; the plugin takes this crate without `app` and links no eframe.
+eframe = { version = "0.37.0", optional = true, features = ["glow"] }
 orb-cli = { path = "../orb-cli", default-features = false, features = ["ogg"] }
 # The native message box of the crash hook (task-157). No default features: on Linux the
 # box is run by `zenity` at run time (no GTK or other system library to link), and the Wayland
