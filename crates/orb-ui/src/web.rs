@@ -408,6 +408,17 @@ pub enum Picked {
     Error(String),
 }
 
+/// The audio checks' stand-ins for what an iPhone does (task-329, docs/web.md section 4.1):
+/// `suspend`, `interrupt`, `close`, `stall` (the worklet stops), `hide` and `show`
+/// ([`orb_player::web::WebOutput::debug`]).
+#[cfg(feature = "app")]
+pub fn debug_audio(what: &str) -> Result<(), String> {
+    OUTPUT.with_borrow(|o| match o {
+        Some(o) => o.debug(what),
+        None => Err("no audio output".into()),
+    })
+}
+
 /// Suspends the audio context, as a browser does before the first gesture (checks of the
 /// resume, which a context running already would hide).
 #[cfg(feature = "app")]
@@ -426,10 +437,17 @@ pub fn state() -> String {
         o.as_ref().map(|o| {
             format!(
                 concat!(
-                    "\"context\":\"{:?}\",\"rate\":{},\"worklet\":{},\"playback\":{},",
+                    "\"context\":\"{}\",\"rebuilding\":{},\"events\":{:?},\"wake\":{},",
+                    "\"media\":{},\"audible\":{},",
+                    "\"rate\":{},\"worklet\":{},\"playback\":{},",
                     "\"loaded\":{},\"wasmMemory\":{}"
                 ),
-                o.context().state(),
+                o.recovery_state().0.as_str(),
+                o.recovery_state().1,
+                o.recovery_state().2,
+                orb_player::web::wake::state(),
+                orb_player::web::media::state(),
+                o.audible(),
                 o.context().sample_rate(),
                 o.worklet_stats()
                     .and_then(|v| js_sys::JSON::stringify(&v).ok())
@@ -935,6 +953,18 @@ impl crate::link::Port for WebPort {
     fn take_errors(&mut self) -> Vec<String> {
         self.0.take_errors()
     }
+
+    fn stop_offline(&mut self) {
+        self.0.stop_offline();
+    }
+
+    fn reconnect(
+        &mut self,
+        transport: Box<dyn orb_player::remote::Transport>,
+        samples: Option<std::sync::Arc<orb_engine::samples::SampleSet>>,
+    ) -> Option<Vec<orb_player::Command>> {
+        Some(self.0.reconnect(transport, samples))
+    }
 }
 
 #[cfg(feature = "app")]
@@ -986,6 +1016,33 @@ pub async fn start(canvas: web_sys::HtmlCanvasElement, worklet_url: &str) -> Res
     load_index();
     loading("Starting the audio", None);
     let out = orb_player::web::WebOutput::start(worklet_url).await?;
+    // a gesture rebuilds a context or worklet that cannot play; the frame gives the new one
+    // the song (`App::web_audio_frame`, task-329)
+    out.enable_rebuild();
+    out.set_notify(Box::new(repaint));
+    orb_player::web::media::set_notify(Box::new(repaint));
+    let debug_audio = window()
+        .and_then(|w| w.location().search().ok())
+        .is_some_and(|q| q.split(['?', '&']).any(|p| p == "debug-audio"));
+    // iOS and iPadOS WebKit stop the song when the page is hidden (an in-app browser's page
+    // lives on after its view closes: task-329, the user's decision of 2026-11-28); `?ios` forces
+    // it, for the checks on a desktop browser
+    let forced_ios = window()
+        .and_then(|w| w.location().search().ok())
+        .is_some_and(|q| q.split(['?', '&']).any(|p| p == "ios"));
+    let ios = window().is_some_and(|w| {
+        let n = w.navigator();
+        orb_player::recovery::ios_webkit(&n.user_agent().unwrap_or_default(), n.max_touch_points())
+    });
+    out.set_stop_on_hidden(forced_ios || ios);
+    web_sys::console::log_1(
+        &format!(
+            "OpenRB-338: a hidden page {} the song{}",
+            if forced_ios || ios { "stops" } else { "plays" },
+            if forced_ios { " (?ios)" } else { "" }
+        )
+        .into(),
+    );
     loading("Drawing the panel", None);
     let tables = Arc::new(orb_engine::tables::Tables::new());
     let samples = Some(rbm::standard::builtin_samples());
@@ -1011,6 +1068,7 @@ pub async fn start(canvas: web_sys::HtmlCanvasElement, worklet_url: &str) -> Res
                 app.enable_logo_anim();
                 app.settings = settings;
                 app.web_debug_panic = debug_panic;
+                app.web_debug_audio = debug_audio;
                 app.web_nav.initial = initial_link;
                 app.action(|app| app.start(None));
                 Ok(Box::new(app))
@@ -1065,6 +1123,7 @@ impl crate::app::App {
         set_title(&self.page_title_text());
         self.web_nav_frame();
         set_unsaved(self.doc.modified);
+        self.web_audio_frame();
         if let Some(link) = &mut self.link {
             let p = link.player();
             let unapplied = p.unapplied();
@@ -1087,6 +1146,102 @@ impl crate::app::App {
             );
             STATE.with_borrow_mut(|t| *t = text);
         }
+    }
+
+    /// The audio's part of a frame (task-329, docs/web.md section 4): a rebuilt audio context
+    /// and worklet get the open song, its mod and its position and play state again
+    /// ([`App::web_restore_audio`]); a song nobody hears any more (the output broke, the page
+    /// was unloaded) shows stopped at once; the Media Session's play and stop drive the player; the
+    /// screen wake lock and the Media Session's state follow what is heard; with `?debug-audio`
+    /// the status line shows the context's state and the recovery's events.
+    fn web_audio_frame(&mut self) {
+        use orb_player::web::media::{self, MediaAction};
+        let why = OUTPUT.with_borrow_mut(|o| o.as_mut().and_then(|o| o.poll_recovery()));
+        if let Some(why) = why {
+            self.web_restore_audio(why);
+        }
+        let (stopped, audible) = OUTPUT.with_borrow(|o| {
+            o.as_ref()
+                .map_or((false, false), |o| (o.take_stopped(), o.audible()))
+        });
+        let action = media::take_action();
+        let name = self.doc.name();
+        if let Some(link) = &mut self.link {
+            if stopped {
+                // nothing is heard: the snapshot shows the song stopped now, not when the next
+                // Play's new worklet takes the Stop (the iPhone round 1: the panel showed it
+                // playing until a tap)
+                link.forward(&mut self.panel);
+                link.player().stop_offline();
+                repaint();
+            }
+            match action {
+                Some(MediaAction::Play) => link.send([orb_player::Command::Play]),
+                // the handler closed the context, as an unload does: `stopped` stopped it
+                Some(MediaAction::Stop) => {}
+                None => {}
+            }
+            let playing = audible && link.player().snapshot().playing;
+            orb_player::web::wake::set_playing(playing);
+            media::set(&name, playing);
+        }
+        if self.web_debug_audio {
+            let line = OUTPUT.with_borrow(|o| {
+                o.as_ref().map(|o| {
+                    let (state, rebuilding, events) = o.recovery_state();
+                    format!(
+                        "audio {}{} | wake {} | {}",
+                        state.as_str(),
+                        if rebuilding { ", rebuilding" } else { "" },
+                        orb_player::web::wake::last(),
+                        events.last().map_or("", String::as_str)
+                    )
+                })
+            });
+            self.status = line;
+        }
+    }
+
+    /// Gives a rebuilt audio worklet the open song: the song as Save writes it (the panel's
+    /// edits and the recorded tracks with it), with its kit, then the position and play state
+    /// the old worklet had, and a Play or Stop it did not take ([`Port::reconnect`]). The
+    /// document is not touched: the song stays as open as it was.
+    ///
+    /// [`Port::reconnect`]: crate::link::Port::reconnect
+    fn web_restore_audio(&mut self, why: &str) {
+        web_sys::console::log_1(&format!("OpenRB-338: audio restarted: {why}").into());
+        // The new context and worklet are swapped in already (`poll_recovery`). The song is built
+        // before the reconnect: a song that does not convert or load is not reconnected (the
+        // player keeps its old transport, whose port is gone), and the output is marked broken,
+        // so the song shows stopped at the next frame and the next tap rebuilds and tries again
+        let song = self.song_for_save().and_then(|s| {
+            orb_engine::load::convert(&s).map_err(|e| format!("cannot load the song: {e:?}"))
+        });
+        let transport = OUTPUT.with_borrow(|o| o.as_ref().map(|o| o.transport()));
+        let (Some(link), Some(transport)) = (&mut self.link, transport) else {
+            return;
+        };
+        let engine = match song.map(|s| link.rebuild_song(&s)) {
+            Ok(Ok(e)) => e,
+            failed => {
+                OUTPUT.with_borrow(|o| {
+                    if let Some(o) = o {
+                        o.restore_failed();
+                    }
+                });
+                return match failed {
+                    Err(e) => self.fail(format!("The audio could not restart: {e}")),
+                    _ => self.fail(orb_engine::frame::LoadRefused::ALERT),
+                };
+            }
+        };
+        let kit = link.kit();
+        let Some(then) = link.player().reconnect(Box::new(transport), kit) else {
+            return;
+        };
+        link.reload(engine, &mut self.panel);
+        link.send(then);
+        self.status = Some(format!("Audio restarted ({why})"));
     }
 
     /// Opens the song at `path` (picked, dropped or of the song collection); a song of the

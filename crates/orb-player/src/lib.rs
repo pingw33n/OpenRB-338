@@ -106,6 +106,7 @@ pub mod devices;
 pub mod midi;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod output;
+pub mod recovery;
 pub mod remote;
 mod resample;
 #[cfg(all(target_arch = "wasm32", feature = "web"))]

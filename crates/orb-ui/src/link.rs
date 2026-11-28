@@ -88,6 +88,25 @@ pub trait Port: Send {
     fn take_errors(&mut self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Stops the song while the audio worklet is gone (the web's hidden page, task-329,
+    /// `orb_player::remote::Player::stop_offline`): the snapshot shows it stopped at once.
+    /// Natively a plain Stop.
+    fn stop_offline(&mut self) {
+        let _ = self.send(Command::Stop);
+    }
+
+    /// Goes on with a new audio worklet through `transport`, started with `samples` (the web,
+    /// after its context or worklet died: task-329, `orb_player::remote::Player::reconnect`).
+    /// The answer is the commands that put the song back where it was, to send after the song
+    /// is loaded again ([`Link::reload`]); `None` for a port that has no worklet.
+    fn reconnect(
+        &mut self,
+        _transport: Box<dyn orb_player::remote::Transport>,
+        _samples: Option<Arc<SampleSet>>,
+    ) -> Option<Vec<Command>> {
+        None
+    }
 }
 
 impl Port for Player {
@@ -822,6 +841,26 @@ impl Link {
         self.fill_views(panel);
         self.flush_marked();
         Ok(())
+    }
+
+    /// The open song built again for a new audio worklet ([`Port::reconnect`], task-329):
+    /// `song`, the open song as Save writes it, with the open song's kit. Nothing is sent: the
+    /// caller reconnects only when this succeeds, then queues the engine with [`Link::reload`].
+    pub fn rebuild_song(&self, song: &Song) -> Result<Box<Engine>, LoadRefused> {
+        self.player.build(song, self.kit.clone())
+    }
+
+    /// Queues `engine` ([`Link::rebuild_song`]) as [`Link::load`] queues a song, but the panel
+    /// stays: it shows that song already.
+    pub fn reload(&mut self, engine: Box<Engine>, panel: &mut Panel) {
+        let samples = self.kit.clone();
+        self.queue_song(engine, samples, panel);
+        self.flush_marked();
+    }
+
+    /// The open song's drum samples (its mod's).
+    pub fn kit(&self) -> Option<Arc<SampleSet>> {
+        self.kit.clone()
     }
 
     /// File > New: a new song, the song constructor's empty song with the template's four

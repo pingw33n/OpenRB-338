@@ -92,9 +92,9 @@ Browsers keep an `AudioContext` suspended until a user gesture. `WebOutput` list
 `resume()` while the context is not running (in the capture phase because a page's own handlers
 may stop the events: eframe stops its canvas's pointer and key events, so a bubbling listener never
 heard a click on the panel, and Play stayed silent where the browser had not let the context
-run already, task-172's review); it does the same on `visibilitychange` when the tab is visible again, in case
-the browser suspended the context while the tab was hidden (Chrome does not; mobile browsers
-may). The engine is not reset: playback goes on from where it stopped.
+run already, task-172's review). Until task-329 it did the same on `visibilitychange` when the tab
+was visible again. Now the return resumes a suspended context without a gesture where the browser
+allows it, and a gesture rebuilds what does not come back (section 4.1).
 
 **The startup sound waits for the first gesture** (the user's report of 2026-11-27: in Firefox and
 Safari the mod's startup sound played only after a mouse click). The sound is the engine's,
@@ -108,6 +108,270 @@ context (Firefox counts `keydown` except Escape and `mousedown`/`pointerdown` of
 in Firefox). `keydown` was listened to before, so a key press is expected to have started the audio
 already; which of the events each browser accepted could not be checked by an agent (Firefox and
 Safari are the user's).
+
+### 4.1 After an interruption: resume, stop or rebuild (task-329)
+
+**The user's first report (iPhone, 2026-11-28).** When the app lost focus (another app, the lock
+screen, a call) the song stopped, and Play made no sound again until a reload. What the code did:
+
+- It made one AudioContext and one worklet node for the page's life (`OUTPUT` in
+  `crates/orb-ui/src/web.rs`).
+- Its one recovery was `resume()` on that context at the next gesture. The promise was dropped,
+  so a refused resume and a resume that left the worklet silent went unseen.
+- Nothing checked that the worklet still rendered. The UI kept the last snapshot, still playing,
+  and Play went into a dead port.
+- The resume guard `state() != Running` was not the cause. web-sys 0.3.106's `AudioContextState`
+  has no "interrupted", but wasm-bindgen turns an unknown string into a hidden invalid variant,
+  which is not `Running`.
+- Which iOS failure the iPhone shows is [G]: a resume refused while the context is
+  "interrupted", or a context "running" whose worklet renders nothing. `?debug-audio` shows it on
+  the phone.
+
+**The user's second report (the same day).** The page was opened and played in Reddit's in-app
+browser. After that the audio went on in the background, and every in-app browser of any app
+played it, with no way to stop it. The supervisor's reading, [G]: iOS's in-app browsers
+(SFSafariViewController) run in one shared process, SafariViewService. Closing the view did not
+stop the page or its AudioContext, and every later in-app browser reuses that process.
+
+**The user's decisions of 2026-11-28.** A first answer, "a hidden page means a stopped song",
+was replaced the same day: "we don't want it to stop anywhere, only if it's needed for
+recovery". Then, between the options below, "do A":
+
+- **On iOS and iPadOS WebKit** (every browser there and the in-app browsers) a hidden page stops
+  the song: `visibilitychange` to hidden, `freeze` and `pagehide` close the context, and the song
+  shows stopped at once. Back on the page it stays stopped; the next tap plays from where it
+  stopped. The detection, `recovery::ios_webkit`, is pure and tested: an iPhone, iPad or iPod
+  user agent, or iPadOS's Mac user agent with `navigator.maxTouchPoints` above 1. `?ios` in the
+  page's URL forces it (the checks on a desktop browser). The console says which applies
+  (`OpenRB-338: a hidden page stops the song` or `plays the song`).
+- **Everywhere else** a hidden or blurred page plays on. Only an unload (`pagehide` that is not
+  persisted) closes the context. Back on the page a context the browser suspended is resumed
+  without a gesture; if that does not bring the sound back within 1.5 s, the song shows stopped
+  and the next tap rebuilds. The UI always matches what is heard.
+
+Why iOS stops on hidden, not only on `pagehide`, [G]: in the second report the sound went on in
+SafariViewService after the view closed, so the page was not unloaded. WebKit stops a document's
+AudioContext when the document is torn down, and a `pagehide` that is not persisted is that
+teardown. A persisted `pagehide` comes only with a navigation into the back/forward cache, and
+closing the view is not a navigation. At most the page sees `visibilitychange` to hidden (WKWebView
+hides the page when its view leaves the window). So a stop on `pagehide` alone would leave the
+in-app browser's leak. On iOS, Safari suspends a hidden page's Web Audio anyway, so stopping there
+loses nothing (round 1 found the song silent on return before the recovery; round 2 confirmed the
+panel then shows it stopped).
+
+The alternatives considered and not taken:
+
+- **B**: never stop on hidden, and set `navigator.audioSession.type = "playback"`, so that iOS
+  lists Web Audio in Control Center with a working stop (section 4.3). The side effects: the song
+  plays with the phone on silent, it interrupts other apps' audio, and a leaked in-app page would
+  keep playing until it is stopped from Control Center.
+- **C**: never stop on hidden and accept the leak.
+
+**The recovery.** `crates/orb-player/src/recovery.rs` is a state machine without the browser,
+tested natively. `orb_player::web::WebOutput` feeds it these inputs, each with its time:
+
+- the context's state, read from `AudioContext.state` as a string (`statechange` and every
+  check);
+- each message of the worklet (a snapshot every engine call, 23 ms);
+- `visibilitychange`, `freeze` (on the document), `pagehide`, `pageshow`, `focus` and `blur` (on
+  the window);
+- the gestures (section 4's `GESTURES`);
+- a check every 500 ms.
+
+The rules:
+
+| What | Then |
+|---|---|
+| The page is hidden (`visibilitychange` to hidden, `freeze`, a persisted `pagehide`) | on iOS and iPadOS WebKit: leave (the context is closed at once, the wake lock let go, the song shows stopped; the output is broken). Elsewhere: nothing, the song plays on |
+| The page is unloaded (`pagehide` that is not persisted) | leave, everywhere |
+| The page is shown again (`visible`, `pageshow`, `focus`), and its context ran and no longer runs | `resume()` without a gesture; if the song does not sound again within 1.5 s it is broken |
+| The context is closed | broken |
+| A context that ran stops running while the page is visible (iOS's "interrupted": a call, Siri) and is not back within 1.5 s | broken |
+| The context runs, the page is visible, and the worklet posts nothing for 1.5 s | broken (the audio thread stopped) |
+| The worklet posts only its statistics or an Error (a trapped or failed worklet) | not counted as alive: broken after 1.5 s, as a silent one |
+| A gesture's `resume()` does not bring the context to running within 1.5 s | broken |
+| A gesture, and the output is broken, or its context ran once and no longer runs | rebuild |
+| A gesture, and the context never ran (the autoplay rule before the first gesture) | `resume()` |
+| The page is hidden | nothing else is judged |
+
+**When nothing is heard, the UI says so at once.** On every new break (`Shared::judge` in
+`orb_player::web`) the output closes the context, so a context that comes back late cannot sound
+under a panel that shows the song stopped. It lets the wake lock go, tells the owner
+(`WebOutput::take_stopped`) and asks for a repaint. The owner's frame calls
+`remote::Player::stop_offline`:
+
+- Stop is posted for the next worklet.
+- The snapshot shows the song stopped at once, with silent meters and nothing unapplied, as one
+  engine call after a Stop would.
+- What the old worklet still posts is dropped, because a snapshot already on its way showed the
+  song playing again (seen in Brave).
+
+The wake lock and the Media Session follow what is heard (`WebOutput::audible`).
+
+**The iPhone round 1 (the user, 2026-11-28, https LAN server).** "wake hold works. audio recovers
+after losing focus. though the UI is not updating until a tap (shows as playing). nothings shows up
+in control center". The cause of the stale panel, [C] from the code: the Stop sent at the first
+frame after the return went to the closed worklet. The UI's snapshot kept the old worklet's last
+one (playing) and counted the Stop as unapplied. `Link::follow` takes the engine's values only
+when nothing is unapplied, so the panel's play light stayed lit until a tap's rebuild brought a
+new snapshot. A missing repaint was not the cause: the page's own notify already asked for one
+on the return. Fixed by `stop_offline`. Checked in Brave via the extension: after `hide` and
+`show`, with no input, the state showed `playing: false, unapplied: 0` and the Play button was
+dim; the next Play rebuilt and played from the bar's start. The design has changed since
+(the user's decisions above). The same fix now serves every break.
+
+**The rebuild.** The new AudioContext is made and resumed inside the gesture's handler, because
+iOS starts a context only there. Any later event of the same gesture resumes it again, since
+Safari counts `touchend` or `click`, not `pointerdown`. The worklet's module, kept from the start,
+is added to the new context, and the node is made asynchronously. `WebOutput::poll_recovery` then
+swaps the new context and node in and closes the old ones. Only a `WebOutput` that called
+`enable_rebuild` rebuilds; the test page (`crates/orb-web-demo`) does not, and a gesture there
+only resumes.
+
+The wake lock takes a held sentinel as the lock held, so a lock that the browser ends without a
+`release` event would be asked for again only after a hide or a Stop. No browser is known to do
+that.
+
+**The song again.** On the swap, `App::web_audio_frame` (`crates/orb-ui/src/web.rs`) does this:
+
+1. `remote::Player::reconnect` posts `Init` to the new worklet with the open song's kit and forgets
+   the kits sent before.
+   - It keeps the snapshots' frames and generations counting up from the old worklet's, so the
+     link's `tracks_from` and frame marks still hold.
+   - It returns the commands that put the song back:
+     - normally `Locate(tick)` of the latest snapshot, then `Play` if that snapshot played, then
+       the Play, Stop and Locate messages the snapshot does not show applied (the Stop of a left
+       page and the Play that rebuilt count);
+     - after a Load that was never applied, only the messages after that Load.
+2. The song as Save writes it (`App::song_for_save`: the panel's edits, the patterns, the recorded
+   tracks, the mod's name) is converted and built (`Link::rebuild_song`) before the reconnect,
+   and queued with `Link::reload`. That is `Link::load` without making the panel new: the panel
+   already shows this song. A song that does not convert or load is not reconnected: the output
+   is marked broken (`WebOutput::restore_failed`), the song shows stopped, and the next tap
+   rebuilds and tries again.
+3. The commands go after it.
+4. The document is not touched: its file, its modified flag and its kit stay. The status line says
+   "Audio restarted (why)".
+
+After a stop the song plays again from the start of the bar where it stopped (the engine's Stop
+locates there). The worklet's engine starts with fresh device state: the tails of the delay and the sounding notes
+are lost, and so is an Undo of an Initialize command, which the old engine held.
+
+**Testing aids.** These stay in the build, since the user's iPhone check needs them:
+
+- `?ios` in the page's URL makes a hidden page stop the song, as on iOS.
+- `?debug-audio` in the page's URL puts a line in the status line every frame: the context's
+  state, the wake lock's state, and the latest recovery event.
+- `state()` (orb-web) reports `context` (the recovery's view, "interrupted" included),
+  `rebuilding`, `events` (the last 12), `wake`, `media` and `audible`.
+- `debug_audio(what)` (orb-web; `WebOutput::debug`) stands in for what Brave cannot do:
+  - `suspend`: the context is suspended;
+  - `interrupt`: the same, reported as "interrupted";
+  - `close`: the context is closed;
+  - `stall`: the processor stops rendering and posting (a `{debug: "stall"}` message to
+    `processor.js`);
+  - `hide`, `show`: the page counts as hidden, as `visibilitychange` to hidden would, then shown;
+  - `hide-suspend`: as `hide`, with the context suspended, as a browser may do;
+  - `hide-dead`: as `hide-suspend`, but the context stays "interrupted" whatever `resume()` does
+    (iOS refusing a resume without a gesture);
+  - `media-play`, `media-stop`: what the Media Session's handlers do.
+- Every recovery event also goes to the console as `orb audio: ...`.
+
+### 4.2 The screen wake lock (task-329)
+
+On an iPhone a locked screen suspends the page's audio. So while the song is heard
+(`Snapshot::playing` and `WebOutput::audible`, each frame) `orb_player::web::wake` holds
+`navigator.wakeLock.request("screen")`, and lets it go on Stop. The browser lets the lock go when
+the page is hidden: the sentinel's `release` event clears it. The lock is asked for again on
+`visibilitychange` to visible while the song is wanted. On iOS, where a hidden page stops the
+song, the next Play asks for it. A grant that arrives after Stop is let go at once. There is
+no settings switch.
+
+The API needs a secure context: https, which GitHub Pages is, or localhost. Over http on a LAN
+address `navigator.wakeLock` is missing, and so is `AudioContext.audioWorklet`, which is also
+secure-context-only, so the page cannot play there at all. Safari has the API from iOS 16.4
+(Home Screen web apps from 18.4). Without the API, or when a request is refused, nothing changes
+but one console line (`orb: no Screen Wake Lock API here ...` or `... was refused: ...`).
+
+### 4.3 The Media Session (task-329)
+
+`orb_player::web::media` tells the system what plays, so that a sound the page makes shows in
+Control Center and on the lock screen with a working stop:
+
+- `navigator.mediaSession.metadata` is a `MediaMetadata`: the title is the song's name (the
+  document's, "Untitled" for a new song) and the artist "OpenRB-338". `playbackState` is
+  "playing" while the song is heard, else "paused". Both are set only when they change.
+- The handlers: "play" is a gesture for the output (it may rebuild), then the UI sends Play;
+  "pause" and "stop" close the context at once, as an unload does, and the song shows stopped.
+  A browser that does not know an action refuses only that one.
+- Without the API nothing changes but one console line (`orb: no Media Session API here`).
+
+**iOS: Control Center shows nothing (the iPhone round 1).** WebKit picks the Now Playing session
+from the page's media sessions by `isNowPlayingEligible()` (`MediaSessionManagerCocoa::
+nowPlayingEligibleSession`, Source/WebCore/platform/audio/cocoa/MediaSessionManagerCocoa.mm).
+The client's default is `false` (`PlatformMediaSessionInterface.h`). `AudioContext` overrides it
+(Source/WebCore/Modules/webaudio/AudioContext.cpp, WebKit main, read 2026-11-28): a Web Audio
+context is eligible only when its destination is connected, it was not suspended by script, and
+`navigator.audioSession.type` is "playback" or "play-and-record" (`hasPlayBackAudioSession`, under
+`ENABLE(DOM_AUDIO_SESSION)`). orb sets no audio session type, so its context is never eligible and
+the Media Session's metadata has nothing to attach to. This is [C] for WebKit main; [G] for the
+shipped iOS Safari the user has, whose WebKit may differ. The Media Session code stays: desktop
+browsers and Android show it.
+
+Two ways to appear there, neither taken here:
+- **`navigator.audioSession.type = "playback"`** (the Audio Session API, Safari 16.4 and later;
+  one feature-detected line). Per the source above this makes the AudioContext eligible. Its side
+  effects: iOS's playback category ignores the Ring/Silent switch (the song plays with the phone
+  on silent, where Web Audio is muted today), interrupts other apps' audio instead of mixing, and
+  lets audio go on in the background. The user chose not to (option B of section 4.1).
+- **An `<audio>` element**: the worklet node into a `MediaStreamAudioDestinationNode`, its
+  `stream` as the `srcObject` of an `<audio>` element that plays, the node no longer connected to
+  `ctx.destination`. It is not done. The risks: added output latency (the media element's own
+  buffering, tens of milliseconds or more, so the panel lags the sound); a second resampling or
+  mixing stage outside the engine's 44.1 kHz path, which the bit-exact output loses; a
+  MediaStream on iOS may switch the audio session to the play-and-record category (the speaker
+  route and volume change); the element has its own autoplay rule and play() promise; and a
+  playing media element is what iOS keeps alive in the background, the very leak of the second
+  report.
+
+### 4.4 Checked (Brave via the extension, which reports itself as Chrome 157; macOS, 2026-11-28)
+
+`http://localhost:8347/OpenRB-338/web/?debug-audio`, the new song (the template), playing. Each
+case was set off with `debug_audio`, then Play was clicked on the panel.
+
+The first design (a return to the page resumed without a gesture), before the second report:
+
+| Case | Seen | After Play |
+|---|---|---|
+| `stall` | "broken: the audio worklet stopped" 1.9 s later | rebuilt in 0.1 s, plays on from tick 2902; generation 1 to 2 |
+| `close` (tempo raised 140 to 142 before) | "context closed" | rebuilt, plays on, the tempo shows 142, the title keeps its `*` |
+| `suspend`, `interrupt` | "context suspended", "context interrupted" | rebuilt, plays on from 11475, 12245 |
+| Stop, `stall`, Play | stopped at 16128 (the bar start) | rebuilt, plays from 16128 |
+
+The second design (a hidden page stopped the song everywhere), with the same cases, before
+the user's decisions: each hidden page closed the context and released the lock, and each Play
+rebuilt and played on. Its numbers are in the task's notes.
+
+The final design (`http://localhost:8347/OpenRB-338/web/?debug-audio`, with `&ios` for iOS mode):
+
+| Case | Seen | After Play |
+|---|---|---|
+| Desktop, `hide` while playing | plays on: the tick went from 748 to 1872 while hidden; the wake lock released while hidden and held again at `show` | |
+| Desktop, `hide-suspend`, then `show` | the context suspended while hidden; resumed without a gesture at `show`, the song went on (2559 to 3224) | |
+| Desktop, `hide-dead`, then `show` | the resume did not take: 2 s after `show`, with no input, "broken: the audio context did not resume" and the song stopped at its bar's start (6144) | rebuilt, plays from 6144 |
+| Desktop, `pagehide` with `persisted: true` (a dispatched event) | plays on | |
+| Desktop, `pagehide` with `persisted: false` | "pagehide: unload", the context closed, the song stopped | |
+| Desktop, `stall`, `close`, `interrupt` | each broken; the context closed and the song shown stopped at once (playing false, unapplied 0) | each rebuilt and played |
+| iOS mode (`?ios`), `hide` while playing | the context closed, "the page was left", the song stopped (playing false, unapplied 0); the Play button dim after `show` with no input | rebuilt, plays from 768 |
+| `media-stop`, `media-play` (the second design) | closed and paused; rebuilt and playing, `metadata` "Untitled" / "OpenRB-338" | |
+
+- Without the APIs (a copy of the page that hides `navigator.mediaSession` and
+  `navigator.wakeLock` before the app starts; the second design): Play played, the rebuild
+  played on, and the console had one line for each missing API.
+- A real tab switch could not be made: a tab the extension opens does not hide the page.
+- Not checked by the agent: an iPhone (task-329's first and last criteria are the user's), a
+  song with a mod (the kit goes through `Link::kit`, as the loopback test's does), and the
+  system's own media controls (the handlers were called through `media-play` and `media-stop`).
 
 ## 5. Measured (Brave via the extension, which reports itself as Chrome 157; macOS, 2026-11-27)
 

@@ -19,6 +19,7 @@ class OrbProcessor extends AudioWorkletProcessor {
     this.queue = [];
     this.ex = null;
     this.dead = false;
+    this.stalled = false;
     this.quanta = 0;
     this.lastCall = 0;
     this.maxGap = 0;
@@ -75,6 +76,11 @@ class OrbProcessor extends AudioWorkletProcessor {
   }
 
   onMessage(data) {
+    // the checks' dead worklet (WebOutput::debug "stall", task-329): no rendering, no messages
+    if (data && data.debug === "stall") {
+      this.stalled = true;
+      return;
+    }
     if (!(data instanceof ArrayBuffer)) return;
     if (this.ex === null) this.queue.push(data);
     else this.take(data);
@@ -102,6 +108,7 @@ class OrbProcessor extends AudioWorkletProcessor {
   }
 
   process(inputs, outputs) {
+    if (this.stalled) return true;
     const out = outputs[0];
     const frames = out[0].length;
     const now = Date.now();

@@ -68,6 +68,14 @@ impl Pair {
         assert!(self.web.take_errors().is_empty());
     }
 
+    /// Only the web half renders `quanta` quanta.
+    fn render_web(&mut self, quanta: usize) {
+        for _ in 0..quanta {
+            self.host.lock().unwrap().render(QUANTUM);
+        }
+        self.web.snapshot();
+    }
+
     fn send(&mut self, c: impl Fn() -> Command) {
         assert!(self.native.0.send(c()).is_ok());
         assert!(self.web.send(c()).is_ok());
@@ -289,4 +297,173 @@ fn resamples_at_another_rate() {
     assert_eq!(web.rate(), Some(48_000));
     // 400 quanta at 48 kHz are about 400 * 128 * 44100 / 48000 engine frames
     assert!((46_000..=49_000).contains(&f), "{f} frames");
+}
+
+/// A new worklet after the old one went silent (task-329, docs/web.md section 4.1): the player
+/// starts it, the song is loaded again, and the commands [`remote::Player::reconnect`] gives
+/// put it at the old position, playing, with the Play pressed while the old worklet was silent.
+/// The new worklet then plays as a native player given the same song and commands, and the
+/// frames and generations of the snapshots go on from the old worklet's.
+#[test]
+fn a_new_worklet_goes_on_where_the_old_one_was() {
+    let mut p = Pair::new();
+    let s = diag("808_bass");
+    let e = p.web.build(&s, Some(samples())).unwrap();
+    assert!(p.web.send(Command::Load(e)).is_ok());
+    assert!(p.web.send(Command::Play).is_ok());
+    for _ in 0..8 * 40 {
+        p.host.lock().unwrap().render(QUANTUM);
+    }
+    let old = *p.web.snapshot();
+    assert!(old.playing && old.tick > 0, "{old:?}");
+    assert_eq!(p.web.unapplied(), 0);
+
+    // the old worklet is silent from here: the Play pressed again reaches it, no snapshot
+    // shows it
+    assert!(p.web.send(Command::Play).is_ok());
+    let host = Arc::new(Mutex::new(Host::new(44_100)));
+    let then = p
+        .web
+        .reconnect(Box::new(Loopback(host.clone())), Some(samples()));
+    let moved: Vec<String> = then
+        .iter()
+        .map(|c| match c {
+            Command::Locate(t) => format!("Locate({t})"),
+            Command::Play => "Play".into(),
+            Command::Stop => "Stop".into(),
+            _ => "other".into(),
+        })
+        .collect();
+    assert_eq!(
+        moved,
+        [
+            format!("Locate({})", old.tick),
+            "Play".into(),
+            "Play".into()
+        ]
+    );
+
+    // the song again, then the commands: on the new worklet and on a native player
+    let mut native = Player::new(tables(), Some(samples()));
+    let e = native.0.build(&s, Some(samples())).unwrap();
+    assert!(native.0.send(Command::Load(e)).is_ok());
+    let e = p.web.build(&s, Some(samples())).unwrap();
+    assert!(p.web.send(Command::Load(e)).is_ok());
+    for c in then {
+        let n = match &c {
+            Command::Locate(t) => Command::Locate(*t),
+            Command::Play => Command::Play,
+            Command::Stop => Command::Stop,
+            _ => unreachable!(),
+        };
+        assert!(native.0.send(n).is_ok());
+        assert!(p.web.send(c).is_ok());
+    }
+    let mut a = vec![0f32; 2 * QUANTUM];
+    let mut sound = false;
+    for q in 0..8 * 40 {
+        native.1.render_f32(&mut a);
+        let mut h = host.lock().unwrap();
+        let b = h.render(QUANTUM);
+        for i in 0..QUANTUM {
+            assert_eq!(
+                (a[2 * i].to_bits(), a[2 * i + 1].to_bits()),
+                (b[i].to_bits(), b[QUANTUM + i].to_bits()),
+                "quantum {q}, frame {i}"
+            );
+            sound |= b[i] != 0.0;
+        }
+    }
+    assert!(sound, "the new worklet is silent");
+    let new = *p.web.snapshot();
+    let want = *native.0.snapshot();
+    assert!(new.playing);
+    assert!(new.tick > old.tick, "{} after {}", new.tick, old.tick);
+    assert_eq!(new.tick, want.tick);
+    assert_eq!(new.frames, old.frames + want.frames);
+    assert_eq!(new.generation, old.generation + want.generation);
+    assert_eq!(p.web.tracks().generation, new.generation);
+    assert_eq!(p.web.unapplied(), 0);
+    assert!(p.web.take_errors().is_empty());
+}
+
+/// A Load the old worklet never applied: only the commands after it are given (the song starts
+/// where a new song starts).
+#[test]
+fn a_reconnect_after_an_unapplied_load() {
+    let mut p = Pair::new();
+    let e = p.web.build(&diag("808_bass"), Some(samples())).unwrap();
+    assert!(p.web.send(Command::Load(e)).is_ok());
+    assert!(p.web.send(Command::Play).is_ok());
+    p.render_web(8 * 20);
+    assert!(p.web.snapshot().playing);
+    assert!(p.web.send(Command::Stop).is_ok());
+    let e = p.web.build(&diag("303_slide"), Some(samples())).unwrap();
+    assert!(p.web.send(Command::Load(e)).is_ok());
+    assert!(p.web.send(Command::Locate(768)).is_ok());
+    let host = Arc::new(Mutex::new(Host::new(44_100)));
+    let then = p.web.reconnect(Box::new(Loopback(host)), Some(samples()));
+    assert_eq!(then.len(), 1);
+    assert!(matches!(then[0], Command::Locate(768)));
+}
+
+/// A Stop while the worklet is gone (task-329, the hidden page): the snapshot shows the song
+/// stopped at once with nothing unapplied, and the new worklet gets the song stopped where a
+/// native player that took the same Stop has it.
+#[test]
+fn a_stop_while_the_worklet_is_gone() {
+    let mut p = Pair::new();
+    let s = diag("808_bass");
+    let e = p.web.build(&s, Some(samples())).unwrap();
+    assert!(p.web.send(Command::Load(e)).is_ok());
+    assert!(p.web.send(Command::Play).is_ok());
+    p.render_web(8 * 40);
+    let old = *p.web.snapshot();
+    assert!(old.playing);
+
+    p.web.stop_offline();
+    // the old worklet renders once more before it goes: its snapshot is not taken
+    p.host.lock().unwrap().render(8 * QUANTUM);
+    let now = *p.web.snapshot();
+    assert!(!now.playing);
+    assert_eq!(p.web.unapplied(), 0);
+    assert_ne!(old.tick % 768, 0);
+    assert_eq!(
+        now.tick, old.tick,
+        "the old worklet's later snapshot (at the bar) is not taken"
+    );
+    assert!(now.frames > old.frames);
+
+    let host = Arc::new(Mutex::new(Host::new(44_100)));
+    let then = p
+        .web
+        .reconnect(Box::new(Loopback(host.clone())), Some(samples()));
+    let mut native = Player::new(tables(), Some(samples()));
+    let e = native.0.build(&s, Some(samples())).unwrap();
+    assert!(native.0.send(Command::Load(e)).is_ok());
+    let e = p.web.build(&s, Some(samples())).unwrap();
+    assert!(p.web.send(Command::Load(e)).is_ok());
+    for c in then {
+        let n = match &c {
+            Command::Locate(t) => Command::Locate(*t),
+            Command::Play => Command::Play,
+            Command::Stop => Command::Stop,
+            _ => unreachable!(),
+        };
+        assert!(native.0.send(n).is_ok());
+        assert!(p.web.send(c).is_ok());
+    }
+    let mut a = vec![0f32; 2 * QUANTUM];
+    for _ in 0..8 * 4 {
+        native.1.render_f32(&mut a);
+        host.lock().unwrap().render(QUANTUM);
+    }
+    let (w, n) = (*p.web.snapshot(), *native.0.snapshot());
+    assert!(!w.playing && !n.playing);
+    assert_eq!(w.tick, n.tick);
+    assert_eq!(
+        w.tick,
+        old.tick - old.tick % 768,
+        "stopped at the start of its bar"
+    );
 }

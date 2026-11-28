@@ -268,6 +268,10 @@ pub struct App {
     /// The web page's `?debug-panic`: the next frame panics (`App::web_frame`, task-172).
     #[cfg(target_arch = "wasm32")]
     pub web_debug_panic: bool,
+    /// The web page's `?debug-audio`: the status line shows the audio context's state and the
+    /// recovery's events (`App::web_audio_frame`, task-329).
+    #[cfg(target_arch = "wasm32")]
+    pub web_debug_audio: bool,
     /// The open document's number: a new one each time a song replaces it (open, New, a drop,
     /// the start), not on a save. What is kept for one document is kept with its number.
     pub(crate) doc_serial: u64,
@@ -368,6 +372,8 @@ impl App {
             plugin: None,
             #[cfg(target_arch = "wasm32")]
             web_debug_panic: false,
+            #[cfg(target_arch = "wasm32")]
+            web_debug_audio: false,
             doc_serial: 0,
             #[cfg(target_arch = "wasm32")]
             web_target: None,

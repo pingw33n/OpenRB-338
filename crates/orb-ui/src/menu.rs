@@ -877,7 +877,7 @@ impl App {
             .map_err(|e| format!("cannot write the song: {e}"))
     }
 
-    fn song_for_save(&mut self) -> Result<rbs::Song, String> {
+    pub(crate) fn song_for_save(&mut self) -> Result<rbs::Song, String> {
         let Some(link) = &mut self.link else {
             return Err("There is no song to save.".into());
         };

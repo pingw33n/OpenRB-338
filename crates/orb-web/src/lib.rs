@@ -27,6 +27,13 @@ pub fn suspend_audio() {
     orb_ui::web::suspend_audio()
 }
 
+/// The audio checks' stand-ins for what an iPhone does (task-329, docs/web.md section 4.1):
+/// `suspend`, `interrupt`, `close`, `stall`, `hide` or `show`.
+#[wasm_bindgen]
+pub fn debug_audio(what: String) -> Result<(), JsValue> {
+    orb_ui::web::debug_audio(&what).map_err(|e| JsValue::from_str(&e))
+}
+
 /// The About box's version text (the page shows it while it loads).
 #[wasm_bindgen]
 pub fn version() -> String {
