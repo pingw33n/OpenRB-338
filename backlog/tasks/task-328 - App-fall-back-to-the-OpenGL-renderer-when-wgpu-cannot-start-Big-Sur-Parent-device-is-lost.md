@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@agent-complex'
 created_date: '2026-11-28T11:45:00Z'
-updated_date: '2026-11-28T12:05:00Z'
+updated_date: '2026-11-28T17:06:00Z'
 labels:
   - ui
 milestone: m-5
@@ -92,6 +92,8 @@ Start (first complete frame, ms, 3 runs): modern wgpu 315/238/224, glow forced 4
 Frames while playing Calm.rbs (29.2 frames/s under both; first 2 s window left out): modern wgpu 1.08-1.19 ms CPU/frame, glow 1.37-1.45; classic wgpu 0.76-0.85, glow 0.71-0.79. Under glow without --play the same song idles at 1.0 frames/s, so the 29 frames/s are the playing panel: the song plays under the fallback ("audio on CoreAudio MacBook Pro Speakers (44100 Hz ...)").
 
 Checks: cargo test --workspace 1226 passed, 0 failed (orb-ui bin: 11, among them a_wgpu_error_before_the_app_retries_with_glow, both_errors_are_in_the_text_when_both_fail, orb_renderer_picks_one_or_the_default_order, the_device_lost_text_is_the_reported_one, only_a_no_adapter_error_names_wgpu_backend). cargo clippy --all-targets -- -D warnings clean (orb-plugin checked in it). cargo +nightly fmt --all --check clean. cargo clippy -p orb-web --target wasm32-unknown-unknown --all-targets -- -D warnings clean; on wasm32 eframe's features are the defaults without glow (cargo tree -e features -i eframe), the one glow crate in the web tree is wgpu-hal's WebGL path, as before. cargo tree -p orb-plugin: no eframe, egui_glow or glutin. Windows: CL=-Wno-incompatible-pointer-types VCINSTALLDIR=/xwin cargo xwin clippy -p orb-ui --target x86_64-pc-windows-msvc --all-targets -- -D warnings: clean (without CL the vorbis C build fails under clang-cl, as scripts/build.sh:115 says). Linux not built: the change adds no cfg-gated code, and eframe's default x11/wayland features already turn on glutin's x11, glx and wayland features; glutin loads libGL/libEGL at run time.
+
+2026-11-28, after the merge: the user sent the reporter (r/Rebirth338, MacBook Air on macOS 11 Big Sur) the by-hand x86_64 build OpenRB-338-2026.1128.1223-x86_64-apple-darwin.dmg (release.yml workflow_dispatch run 46144405381 on main at 937711d, SHA-256 82542cef892d7c37e33d9ab33716fd0d5b14412f01a00bad1a4847304a20593b). The reporter says the app now opens: the "WGPU error: Parent device is lost" start error is fixed.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
